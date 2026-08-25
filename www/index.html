@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ReactorNet - C++ Network Library</title>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --fg: #c9d1d9;
+            --accent: #58a6ff;
+            --border: #30363d;
+            --code-bg: #161b22;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--fg);
+            line-height: 1.6;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        h1 { color: var(--accent); font-size: 2.5rem; margin-bottom: 0.5rem; }
+        h2 { color: var(--accent); margin-top: 2rem; margin-bottom: 0.5rem; }
+        p { margin-bottom: 1rem; }
+        ul { margin-bottom: 1rem; padding-left: 1.5rem; }
+        li { margin-bottom: 0.25rem; }
+        code {
+            background: var(--code-bg);
+            padding: 0.15em 0.4em;
+            border-radius: 3px;
+            font-size: 0.9em;
+        }
+        .feature-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1rem;
+            margin: 1.5rem 0;
+        }
+        .feature-card {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+        }
+        .feature-card h3 { color: var(--accent); font-size: 1rem; margin-bottom: 0.5rem; }
+        .footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); font-size: 0.85rem; color: #8b949e; }
+    </style>
+</head>
+<body>
+    <h1>ReactorNet</h1>
+    <p>A minimalist C++ network library inspired by muduo. Epoll-driven, non-blocking I/O, with timer heap and multi-reactor threading.</p>
+
+    <div class="feature-list">
+        <div class="feature-card">
+            <h3>Epoll Event-Driven</h3>
+            <p>High-performance I/O multiplexing via <code>epoll</code>, supporting thousands of concurrent connections.</p>
+        </div>
+        <div class="feature-card">
+            <h3>Timer Heap</h3>
+            <p>Min-heap timer management using <code>timerfd</code> for precise, kernel-level timeout handling.</p>
+        </div>
+        <div class="feature-card">
+            <h3>Read/Write Buffers</h3>
+            <p>Efficient buffer management with scatter/gather I/O to handle TCP framing.</p>
+        </div>
+        <div class="feature-card">
+            <h3>Multi-Reactor Threading</h3>
+            <p>One loop per thread with round-robin connection distribution for CPU scalability.</p>
+        </div>
+        <div class="feature-card">
+            <h3>HTTP 1.0 Server</h3>
+            <p>Built-in static file serving with URL decoding and path traversal protection.</p>
+        </div>
+        <div class="feature-card">
+            <h3>Zero Dependencies</h3>
+            <p>Pure Linux system calls — no Boost, no libevent, no third-party libraries.</p>
+        </div>
+    </div>
+
+    <h2>Quick Start</h2>
+    <pre><code>$ mkdir -p build && cd build && cmake .. && make -j$(nproc)
+$ ./reactor_demo           # Echo server on port 8080
+$ ./reactor_demo 4         # Multi-threaded echo (4 workers)
+$ ./reactor_demo http      # HTTP server on port 8080
+$ ./reactor_demo http 4    # Multi-threaded HTTP (4 workers)</code></pre>
+
+    <h2>Modules</h2>
+    <ul>
+        <li><code>EventLoop</code> — Per-thread event loop with cross-thread task dispatch</li>
+        <li><code>EPollPoller</code> — Epoll-based I/O multiplexing</li>
+        <li><code>Channel</code> — Event dispatcher (fd + callbacks)</li>
+        <li><code>TimerQueue</code> — Min-heap timer management with timerfd</li>
+        <li><code>TcpConnection</code> — TCP connection with input/output buffers</li>
+        <li><code>TcpServer</code> — Multi-reactor server with accept loop</li>
+        <li><code>Acceptor</code> — Listening socket handler</li>
+        <li><code>Buffer</code> — Non-contiguous read/write buffer</li>
+        <li><code>HttpRequest/HttpResponse</code> — Simple HTTP 1.0 parser</li>
+    </ul>
+
+    <div class="footer">
+        Built with epoll + non-blocking I/O on Linux. No external dependencies.
+    </div>
+</body>
+</html>

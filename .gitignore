@@ -1,0 +1,10 @@
+# 构建产物
+/build/
+/compile_commands.json
+
+# 工具缓存
+/.cache/
+
+# 个人文档（简历 / 面试笔记，不入库）
+/resume.md
+/reactornet.md

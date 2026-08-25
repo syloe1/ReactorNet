@@ -1,0 +1,18 @@
+{
+    // 禁用 Microsoft C/C++ 扩展的 IntelliSense，避免和 clangd 冲突
+    "C_Cpp.intelliSenseEngine": "disabled",
+    "C_Cpp.autocomplete": "disabled",
+    "C_Cpp.errorSquiggles": "disabled",
+
+    // clangd 配置
+    "clangd.arguments": [
+        "--background-index",
+        "--compile-commands-dir=${workspaceFolder}",
+        "-j=4"
+    ],
+
+    // 确保 clangd 在 C/C++ 文件上生效
+    "[cpp]": {
+        "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+    }
+}
