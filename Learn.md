@@ -383,11 +383,11 @@ class EventLoopThread {
 - 默认路径：`/` → `/index.html`
 
 ### 5.2 `include/HttpResponse.h` + `src/HttpResponse.cpp`
-**10 分钟** — HTTP/1.0 响应构建器。
+**10 分钟** — HTTP/1.1 响应构建器。
 - 设置状态码（200/400/404/500）
 - 设置 Content-Type、Content-Length
 - 序列化为 Buffer
-- 始终 `Connection: close`
+- 默认 keep-alive，`closeConnection_ = true` 时才发 `Connection: close`
 
 ### 5.3 `src/main.cpp`
 **20 分钟** — 把所有东西串起来。两个 Demo 服务器：
@@ -402,17 +402,25 @@ void onMessage(const TcpConnectionPtr& conn, Buffer* buf) {
 
 **HttpServer**（在 main.cpp 里内联实现）：
 ```cpp
-// 收到 HTTP 请求 → 读文件 → 构建 HTTP 响应 → 发送
+// 收到 HTTP 请求 → 读文件 → 构建 HTTP/1.1 响应 → 发送（keep-alive 不断连）
 void onMessage(const TcpConnectionPtr& conn, Buffer* buf) {
-    HttpRequest req;
-    req.parse(buf);
-    std::string body = readFile("www" + req.path());
-    HttpResponse resp;
-    resp.setBody(body);
-    Buffer respBuf;
-    resp.appendToBuffer(&respBuf);
-    conn->send(&respBuf);
-    conn->shutdown();  // HTTP/1.0: 发完就关
+    // 一个 Buffer 里可能攒了多个请求，循环逐个处理
+    while (true) {
+        HttpRequest req;
+        if (!req.parseRequest(buf->peek(), buf->peek() + buf->readableBytes()))
+            return;  // 请求不完整，等下一批数据
+
+        // 消费一个完整请求（GET 无 body，头以 \r\n\r\n 结束）
+        const char* end = std::search(buf->peek(), buf->peek() + buf->readableBytes(),
+                                      "\r\n\r\n", "\r\n\r\n" + 4);
+        buf->retrieve((end + 4) - buf->peek());
+
+        HttpResponse resp(false);        // false = keep-alive，不断连
+        resp.setBody(readFile("www" + req.path()));
+        Buffer respBuf;
+        resp.appendToBuffer(&respBuf);
+        conn->send(respBuf.retrieveAllAsString());  // 不 shutdown，连接保持
+    }
 }
 ```
 
@@ -449,12 +457,8 @@ cmake .. && make -j$(nproc)
 
 ### 进阶练习（选做）
 
-### 练习 6：实现 HTTP/1.1 Keep-Alive
-当前实现每个请求后立即关闭连接。修改 HttpServer 支持：
-- 解析 `Connection: keep-alive` 头
-- 发送 `Connection: keep-alive` 响应头
-- 不调用 `shutdown()`，保持连接打开
-- 支持同一连接上接收多个请求（需要考虑 Buffer 中可能有多个请求的边界）
+### 练习 6：实现 HTTP/1.1 Keep-Alive ✅（主代码已实现）
+主代码已支持 HTTP/1.1 keep-alive：响应行用 HTTP/1.1、`HttpResponse(false)` 不断连、`onMessage` 循环处理同一连接 Buffer 里的多个请求。想练手的话，可以自己回退到短连接再重写一遍（把 `false` 改回 `true` 并加回 `shutdown()`），或者直接做练习 7（空闲超时），补上 keep-alive 目前缺的「死连接踢掉」。
 
 ### 练习 7：实现定时断开空闲连接
 使用 TimerQueue 给每个连接设置一个空闲超时（比如 30 秒）。如果连接在超时内没有收到任何数据，主动关闭连接。每次收到数据时重置定时器。

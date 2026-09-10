@@ -8,7 +8,7 @@ A minimalist C++ network library implementing the Reactor pattern, inspired by [
 - **Timer Heap** — Min-heap timer management using `timerfd_create` for kernel-level precision
 - **Read/Write Buffers** — Efficient `readv`-based input with automatic growth, handles TCP framing
 - **Single Reactor / Multi-Reactor** — One-loop-per-thread architecture with round-robin load distribution
-- **HTTP 1.0 Server** — Static file serving with URL decoding and path traversal protection
+- **HTTP/1.1 Keep-Alive Server** — Static file serving with URL decoding and path traversal protection
 - **Zero Dependencies** — C++17, Linux system calls only
 
 ## Architecture
@@ -56,7 +56,7 @@ TcpServer(baseLoop主线程)
 | `Socket` | RAII wrapper around socket fd |
 | `InetAddress` | `sockaddr_in` wrapper |
 | `HttpRequest` | Simple HTTP 1.0 request parser (GET only) |
-| `HttpResponse` | HTTP 1.0 response builder |
+| `HttpResponse` | HTTP/1.1 response builder |
 
 ## Build & Run
 
