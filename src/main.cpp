@@ -70,60 +70,55 @@ public:
 
 private:
     void onMessage(const TcpConnectionPtr& conn, Buffer* buf) {
-        // Parse the HTTP request
-        HttpRequest req;
-        const char* peek = buf->peek();
-        if (!req.parseRequest(peek, peek + buf->readableBytes())) {
-            // Incomplete request, wait for more data
-            return;
+        // HTTP/1.1 keep-alive: handle every complete request already buffered.
+        while (true) {
+            const char* dataStart = buf->peek();
+            const char* dataEnd = dataStart + buf->readableBytes();
+
+            HttpRequest req;
+            if (!req.parseRequest(dataStart, dataEnd)) {
+                // Incomplete request, wait for more data
+                return;
+            }
+
+            // Consume one complete request: header ends at \r\n\r\n (GET has no body)
+            const char* headerEnd = std::search(dataStart, dataEnd, "\r\n\r\n", "\r\n\r\n" + 4);
+            if (headerEnd == dataEnd) {
+                return;
+            }
+            buf->retrieve((headerEnd + 4) - dataStart);
+
+            HttpResponse response(false);  // keep-alive: do not close
+
+            // Secure path: prevent directory traversal
+            std::string filePath = docRoot_ + req.path();
+
+            // Read file
+            std::ifstream file(filePath, std::ios::binary);
+            if (file.is_open()) {
+                std::ostringstream oss;
+                oss << file.rdbuf();
+                std::string content = oss.str();
+
+                response.setStatusCode(HttpResponse::k200Ok);
+                response.setContentType(getMimeType(req.path()));
+                response.setBody(content);
+            } else {
+                // 404 Not Found
+                std::string notFoundBody = "<html><head><title>404 Not Found</title></head>"
+                                           "<body><h1>404 Not Found</h1><p>"
+                                           "The requested URL was not found on this server."
+                                           "</p></body></html>";
+                response.setStatusCode(HttpResponse::k404NotFound);
+                response.setContentType("text/html");
+                response.setBody(notFoundBody);
+            }
+
+            // Serialize response to a Buffer and send (connection stays open)
+            Buffer responseBuf;
+            response.appendToBuffer(&responseBuf);
+            conn->send(responseBuf.retrieveAllAsString());
         }
-
-        // Consume the parsed data - find \r\n\r\n
-        const char* dataStart = buf->peek();
-        const char* dataEnd = dataStart + buf->readableBytes();
-        const char* headerEnd = std::search(dataStart, dataEnd, "\r\n\r\n", "\r\n\r\n" + 4);
-        if (headerEnd != dataEnd) {
-            size_t consumed = (headerEnd + 4) - dataStart;
-            buf->retrieve(consumed);
-        } else {
-            buf->retrieveAll();
-        }
-
-        HttpResponse response(true);  // HTTP/1.0: close after response
-
-        std::cout << "[HTTP] " << req.path() << std::endl;
-
-        // Secure path: prevent directory traversal
-        std::string filePath = docRoot_ + req.path();
-
-        // Read file
-        std::ifstream file(filePath, std::ios::binary);
-        if (file.is_open()) {
-            std::ostringstream oss;
-            oss << file.rdbuf();
-            std::string content = oss.str();
-
-            response.setStatusCode(HttpResponse::k200Ok);
-            response.setContentType(getMimeType(req.path()));
-            response.setBody(content);
-        } else {
-            // 404 Not Found
-            std::string notFoundBody = "<html><head><title>404 Not Found</title></head>"
-                                       "<body><h1>404 Not Found</h1><p>"
-                                       "The requested URL was not found on this server."
-                                       "</p></body></html>";
-            response.setStatusCode(HttpResponse::k404NotFound);
-            response.setContentType("text/html");
-            response.setBody(notFoundBody);
-        }
-
-        // Serialize response to a Buffer and send
-        Buffer responseBuf;
-        response.appendToBuffer(&responseBuf);
-        conn->send(responseBuf.retrieveAllAsString());
-
-        // HTTP 1.0 non-persistent: close after response
-        conn->shutdown();
     }
 
     static std::string getMimeType(const std::string& path) {

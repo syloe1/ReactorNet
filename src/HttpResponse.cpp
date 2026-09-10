@@ -19,7 +19,7 @@ void HttpResponse::appendToBuffer(Buffer* output) const {
     std::string msg = statusMessage_.empty()
                       ? statusMessageForCode(statusCode_)
                       : statusMessage_;
-    std::snprintf(buf, sizeof(buf), "HTTP/1.0 %d %s\r\n",
+    std::snprintf(buf, sizeof(buf), "HTTP/1.1 %d %s\r\n",
                   static_cast<int>(statusCode_), msg.c_str());
     output->append(buf);
 
