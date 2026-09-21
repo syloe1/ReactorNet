@@ -66,14 +66,18 @@ cmake ..
 make -j$(nproc)
 ```
 
+All examples are run from the `build/` directory.
+
 ### Echo Server
 
 ```bash
+# Usage: ./echo_server [numThreads]
+
 # Single-threaded (default)
-./reactor_demo
+./echo_server
 
 # 4 worker threads
-./reactor_demo 4
+./echo_server 4
 
 # Test with netcat
 echo "Hello, Reactor!" | nc localhost 8080
@@ -82,11 +86,14 @@ echo "Hello, Reactor!" | nc localhost 8080
 ### HTTP Server
 
 ```bash
+# Usage: ./http_server <port> <docRoot> [numThreads]
+# docRoot must be given explicitly — no guessing of the working directory.
+
 # Single-threaded HTTP
-./reactor_demo http
+./http_server 8080 ../www
 
 # 4 worker threads
-./reactor_demo http 4
+./http_server 8080 ../www 4
 
 # Test with curl
 curl http://localhost:8080/
