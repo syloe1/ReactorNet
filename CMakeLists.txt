@@ -40,9 +40,13 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(reactornet PUBLIC -Wall -Wextra -Wpedantic)
 endif()
 
-# Create the demo executable: only main.cpp, everything else comes from the library
-add_executable(reactor_demo src/main.cpp)
-target_link_libraries(reactor_demo PRIVATE reactornet)
+# Echo Server example
+add_executable(echo_server example/echo_server.cpp)
+target_link_libraries(echo_server PRIVATE reactornet)
 
+# Http Server example
+add_executable(http_server example/http_server.cpp)
+target_link_libraries(http_server PRIVATE reactornet)
 # Install
-install(TARGETS reactor_demo DESTINATION bin)
+install(TARGETS echo_server http_server DESTINATION bin)
+
