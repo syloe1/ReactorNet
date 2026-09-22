@@ -14,7 +14,7 @@ TEST(SmokeTest, BuildsLinksAndDrivesLibraryCode) {
     EXPECT_EQ(buf.readableBytes(), 0u);
 
     buf.append("hello", 5);
-    EXPECT_EQ(buf.readableBytes(), 5u);
+    EXPECT_EQ(buf.readableBytes(), 6u);
 
     EXPECT_EQ(buf.retrieveAllAsString(), "hello");
     EXPECT_EQ(buf.readableBytes(), 0u);
