@@ -1,5 +1,7 @@
 # ReactorNet
 
+[![CI](https://github.com/syloe1/ReactorNet/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/syloe1/ReactorNet/actions/workflows/ci.yml)
+
 A minimalist C++ network library implementing the Reactor pattern, inspired by [muduo](https://github.com/chenshuo/muduo). No third-party dependencies — pure Linux system calls.
 
 ## Features
