@@ -50,3 +50,14 @@ target_link_libraries(http_server PRIVATE reactornet)
 # Install
 install(TARGETS echo_server http_server DESTINATION bin)
 
+# --- Tests -----------------------------------------------------------------
+# GoogleTest is a dev-only dependency: nothing under tests/ is ever linked into
+# reactornet, so the library keeps its "no third-party dependencies" property.
+# include(CTest) defines the standard BUILD_TESTING option (ON by default) and
+# calls enable_testing(); with -DBUILD_TESTING=OFF tests/ is skipped entirely
+# and GoogleTest is never downloaded.
+include(CTest)
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()
+
