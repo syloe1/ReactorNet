@@ -41,7 +41,7 @@ TcpServer(baseLoop主线程)
 │     │            │            │            │
 │  TcpConn     TcpConn     TcpConn          │
 └───────────────────────────────────────────┘
-```~
+```
 
 ### Module Overview
 
@@ -153,13 +153,18 @@ ReactorNet/
 │   ├── EventLoopThread.h
 │   ├── HttpRequest.h
 │   └── HttpResponse.h
-├── src/               # Source files
-│   ├── *.cpp
-│   └── main.cpp
+├── src/               # Library sources (built into libreactornet.a)
+│   └── *.cpp
+├── example/           # Standalone demo binaries
+│   ├── echo_server.cpp
+│   └── http_server.cpp
+├── tests/             # GoogleTest suites (dev-only, see -DBUILD_TESTING)
+│   ├── CMakeLists.txt
+│   └── smoke_test.cpp
 └── www/               # Static files (HTTP server)
     └── index.html
 ```
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
