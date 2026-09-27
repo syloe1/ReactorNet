@@ -18,6 +18,7 @@ add_executable(reactornet_tests
     smoke_test.cpp
     buffer_test.cpp
     event_loop_test.cpp
+    timer_queue_test.cpp
 )
 
 target_link_libraries(reactornet_tests PRIVATE
