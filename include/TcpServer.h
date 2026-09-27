@@ -4,6 +4,7 @@
 #include "TcpConnection.h"
 #include "noncopyable.h"
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
@@ -68,6 +69,12 @@ public:
   const std::string &name() const { return name_; }
   EventLoop *getLoop() const { return baseLoop_; }
   std::vector<EventLoop *> getAllLoops();
+
+  // The port the listening socket is bound to. The Acceptor binds in the
+  // TcpServer constructor, so this is already meaningful before start();
+  // it is how a caller that asked for port 0 learns which port the kernel
+  // handed out. Same thread-affinity caveat as the rest of the acceptor.
+  uint16_t listenPort() const;
 
 private:
   // using TcpConnectionPtr = std::shared_ptr<TcpConnection>;
