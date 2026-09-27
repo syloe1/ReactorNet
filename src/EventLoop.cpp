@@ -121,6 +121,8 @@ void EventLoop::runInLoop(Functor cb) {
   }
 }
 // 线程安全投递任务
+
+// 把任务丢进pending队列， 不立即执行，满足条件就唤醒loop
 void EventLoop::queueInLoop(Functor cb) {
   { // 锁持有范围， 最小临界区
     std::lock_guard<std::mutex> lock(mutex_);
@@ -129,6 +131,8 @@ void EventLoop::queueInLoop(Functor cb) {
   // Wake up the loop if:
   // - Called from another thread, OR
   // - Called from loop thread while doPendingFunctors is running
+
+  // 当前 在线程要做回调要唤醒， 跨线程要唤醒
   if (!isInLoopThread() || callingPendingFunctors_) {
     wakeup();
   }
