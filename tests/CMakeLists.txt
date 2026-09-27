@@ -16,6 +16,7 @@ FetchContent_MakeAvailable(googletest)
 
 add_executable(reactornet_tests
     smoke_test.cpp
+    buffer_test.cpp
 )
 
 target_link_libraries(reactornet_tests PRIVATE
