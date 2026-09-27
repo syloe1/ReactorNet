@@ -1,7 +1,9 @@
 #include "Acceptor.h"
 #include "EventLoop.h"
+#include <cstring>
 #include <fcntl.h>
 #include <iostream>
+#include <sys/socket.h>
 #include <unistd.h>
 //   EventLoop *loop_;       // 绑定的主线程主Reactor
 //   Socket acceptSocket_;   // 封装listen监听fd
@@ -34,6 +36,18 @@ void Acceptor::listen() {
   listening_ = true;
   acceptSocket_.listen();         // dial 底层syscall, 开启TCp半连接队列
   acceptChannel_.enableReading(); // 注册EPOLLIN, epoll监听新连接事件
+}
+
+InetAddress Acceptor::listenAddress() const {
+  sockaddr_in addr;
+  socklen_t addrLen = sizeof(addr);
+  std::memset(&addr, 0, sizeof(addr));
+  if (::getsockname(acceptSocket_.fd(), reinterpret_cast<sockaddr *>(&addr),
+                    &addrLen) < 0) {
+    std::cerr << "[Acceptor] getsockname failed: " << strerror(errno)
+              << std::endl;
+  }
+  return InetAddress(addr);
 }
 
 void Acceptor::handleRead() {
