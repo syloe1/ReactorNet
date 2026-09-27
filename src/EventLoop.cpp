@@ -62,6 +62,11 @@ EventLoop::EventLoop()
 }
 
 EventLoop::~EventLoop() {
+  // timerQueue_ 持有一个 Channel：~TimerQueue → Channel::remove() →
+  // poller_->removeChannel()。而成员析构在函数体 *之后* 才跑，所以必须先于
+  // delete poller_ 手动销毁它，否则这里踩的就是已经 delete 掉的 poller_。
+  timerQueue_.reset();
+
   // 停止监听wakeupfd，从epoll删除
   wakeupChannel_->disableAll();
   wakeupChannel_->remove();
