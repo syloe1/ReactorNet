@@ -2,6 +2,8 @@
 
 #include "InetAddress.h"
 #include "noncopyable.h"
+#include <sys/types.h>
+#include <sys/uio.h>
 
 // 封装socket系统调用
 class Socket : noncopyable {
@@ -33,6 +35,14 @@ public:
   void listen(int bakclog = SOMAXCONN);
   // 封装accept4非阻塞接受客户端连接
   int accept(InetAddress *peerAddr);
+
+  // 封装的读写系统调用。失败返回 -1 并保留 errno，由调用方决定如何处理——
+  // 非阻塞 IO 下 EAGAIN / EWOULDBLOCK / EINTR 都属正常情况，故此处不打印、
+  // 不重试，避免与调用方的错误处理重复。
+  ssize_t read(void *buf, size_t len);
+  ssize_t write(const void *buf, size_t len);
+  // 分散读：一次读入多段缓冲区，避免大包导致读缓冲过早扩容
+  ssize_t readv(const struct iovec *iov, int iovcnt);
 
   void setReuseAddr(bool on);  // 地址复用
   void setReusePort(bool on);  // 端口复用
