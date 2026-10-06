@@ -57,6 +57,19 @@ int Socket::accept(InetAddress *peerAddr) {
   return connfd;
 }
 
+// 以下三个是纯转发：只做系统调用，不判断、不打印、不重试。
+// 返回值与 errno 原样交给调用方，因为对非阻塞 fd 而言 EAGAIN / EINTR
+// 是正常的控制流而非错误，是否重试取决于调用方的状态机。
+ssize_t Socket::read(void *buf, size_t len) { return ::read(sockfd_, buf, len); }
+
+ssize_t Socket::write(const void *buf, size_t len) {
+  return ::write(sockfd_, buf, len);
+}
+
+ssize_t Socket::readv(const struct iovec *iov, int iovcnt) {
+  return ::readv(sockfd_, iov, iovcnt);
+}
+
 void Socket::setReuseAddr(bool on) {
   // 1 开启 0 关闭
   int optval = on ? 1 : 0;
