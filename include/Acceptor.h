@@ -25,6 +25,12 @@ public:
   // 查询监听状态s
   bool listening() const { return listening_; }
 
+  // The address the listening socket is actually bound to. The constructor
+  // binds, so this is valid before listen(). With a port 0 request the kernel
+  // picks the port, which makes this the only way to learn what it picked —
+  // tests need it so they never have to hardcode a port that CI might be using.
+  InetAddress listenAddress() const;
+
 private:
   // 客户端发起TCP握手， listen fd变为可读， epoll触发EPOLLIN，
   // Channel调用此函数
