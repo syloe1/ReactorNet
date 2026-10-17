@@ -21,3 +21,38 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  sanitizers:
+    name: Sanitizers (${{ matrix.sanitizer }})
+    runs-on: ubuntu-latest
+    strategy:
+      # One sanitizer failing must not cancel the other: they catch different
+      # classes of bugs.
+      fail-fast: false
+      matrix:
+        sanitizer: [address, thread]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build -DBUILD_TESTING=ON -DSANITIZER=${{ matrix.sanitizer }}
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Test
+        env:
+          # Each variable is ignored by the other sanitizer's build.
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+          TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
+        run: |
+          # TSan cannot map its shadow memory when the kernel's ASLR entropy is
+          # high (vm.mmap_rnd_bits=32, common on newer Ubuntu runners).
+          # Disabling ASLR for the test process is the standard workaround.
+          if [ "${{ matrix.sanitizer }}" = "thread" ]; then
+            setarch "$(uname -m)" -R ctest --test-dir build --output-on-failure
+          else
+            ctest --test-dir build --output-on-failure
+          fi
