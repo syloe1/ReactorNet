@@ -31,6 +31,8 @@ using namespace reactornet;
 //   2. cancel() has to keep two structures in sync — the heap (timers_) and the
 //      activeTimers_ set. Drift between them compiles and runs; the damage is
 //      a callback that fires when it should not, or a pointer freed twice.
+//      TimerId (pointer + sequence) makes a stale handle a no-op rather than an
+//      ABA double-free.
 //
 // Driving the loop: EventLoop builds its Poller, its Channels and its
 // TimerQueue eagerly and asserts thread affinity throughout, and a __thread
@@ -179,14 +181,14 @@ protected:
   // "must be called from the EventLoop thread" comment on addTimer. The queue
   // is FIFO, which is what makes "addTimer then immediately cancel" land as
   // insert-then-erase instead of a race.
-  Timer *addTimer(std::function<void()> cb, double delay,
-                  double interval = 0.0) {
+  TimerId addTimer(std::function<void()> cb, double delay,
+                   double interval = 0.0) {
     return queue_->addTimer(std::move(cb), delay, interval);
   }
 
   // Absolute overload: two timers sharing one Timestamp are guaranteed to be
   // collected by the same getExpired() pass.
-  Timer *addTimerAt(std::function<void()> cb, Timestamp when) {
+  TimerId addTimerAt(std::function<void()> cb, Timestamp when) {
     return queue_->addTimer(std::move(cb), when, 0.0);
   }
 
@@ -238,17 +240,21 @@ TEST_F(TimerQueueTest, RepeatingTimerCancelledFromItsOwnCallbackStopsFiring) {
   std::atomic<Timer *> self{nullptr};
 
   // addTimer() defers insertion into the loop, and the first expiration is
-  // 20ms out, so the store below wins the race.
-  Timer *timer = addTimer(
+  // 20ms out, so the store below wins the race. Only the pointer is atomic:
+  // TimerId is 16 bytes, which would need libatomic on x86-64. The callback
+  // reads sequence() from the Timer that is currently invoking it, so the
+  // object is alive by construction.
+  TimerId timer = addTimer(
       [&] {
         const int n = ++runs;
         rec.record(1);
         if (n == 3) {
-          queue_->cancel(self.load());
+          Timer *p = self.load();
+          queue_->cancel(TimerId(p, p->sequence()));
         }
       },
       0.02, 0.02);
-  self.store(timer);
+  self.store(timer.timer());
 
   addTimer([&] { rec.record(99); }, 0.20); // sentinel: four intervals have passed
 
@@ -297,7 +303,7 @@ TEST_F(TimerQueueTest, ImmediateCancelPreventsCallback) {
   Recorder rec;
   std::atomic<int> runs{0};
 
-  Timer *victim = addTimer(
+  TimerId victim = addTimer(
       [&] {
         ++runs;
         rec.record(1);
@@ -312,13 +318,102 @@ TEST_F(TimerQueueTest, ImmediateCancelPreventsCallback) {
   EXPECT_EQ(rec.ids(), (std::vector<long>{99}));
 }
 
+TEST_F(TimerQueueTest, DoubleCancelIsIdempotent) {
+  Recorder rec;
+  std::atomic<int> runs{0};
+
+  TimerId victim = addTimer(
+      [&] {
+        ++runs;
+        rec.record(1);
+      },
+      0.04);
+  queue_->cancel(victim);
+  queue_->cancel(victim); // second cancel must not double-free
+
+  addTimer([&] { rec.record(99); }, 0.10);
+
+  ASSERT_TRUE(rec.waitFor(1, kWaitTimeout))
+      << "the loop must survive a repeated cancel";
+  EXPECT_EQ(runs.load(), 0);
+  EXPECT_EQ(rec.ids(), (std::vector<long>{99}));
+}
+
+// A TimerId outlives the Timer it refers to. Cancelling after expiration is a
+// no-op: the id is compared by (pointer, sequence) and never dereferenced.
+TEST_F(TimerQueueTest, CancelAfterExpirationIsNoOp) {
+  Recorder rec;
+  std::atomic<int> runs{0};
+
+  TimerId victim = addTimer([&] { ++runs; }, 0.02);
+
+  addTimer([&] { rec.record(1); }, 0.08); // victim has fired and been deleted
+  ASSERT_TRUE(rec.waitFor(1, kWaitTimeout));
+
+  queue_->cancel(victim); // dangling handle in the TimerId; must be a no-op
+  queue_->cancel(victim);
+
+  addTimer([&] { rec.record(99); }, 0.08);
+  ASSERT_TRUE(rec.waitFor(2, kWaitTimeout))
+      << "cancelling an expired timer must not take the loop down";
+  EXPECT_EQ(runs.load(), 1);
+  EXPECT_EQ(rec.ids(), (std::vector<long>{1, 99}));
+}
+
+// The one-shot counterpart of the repeating self-cancel case below: while the
+// callback runs, the timer is already out of the heap but still owned by
+// reset(). cancel() records it in cancelingTimers_ and reset() deletes it.
+TEST_F(TimerQueueTest, OneShotTimerCancelledFromItsOwnCallback) {
+  Recorder rec;
+  std::atomic<int> runs{0};
+  std::atomic<Timer *> self{nullptr};
+
+  TimerId timer = addTimer(
+      [&] {
+        ++runs;
+        rec.record(1);
+        Timer *p = self.load();
+        queue_->cancel(TimerId(p, p->sequence()));
+      },
+      0.03);
+  self.store(timer.timer());
+
+  addTimer([&] { rec.record(99); }, 0.10); // sentinel: the loop survived
+
+  ASSERT_TRUE(rec.waitFor(2, kWaitTimeout));
+  EXPECT_EQ(runs.load(), 1);
+  EXPECT_EQ(rec.ids(), (std::vector<long>{1, 99}));
+}
+
+// cancel() is thread-safe by contract. This is the functional check; the data
+// race itself is what the TSAN CI job (#26) will catch.
+TEST_F(TimerQueueTest, CancelFromAnotherThreadPreventsCallback) {
+  Recorder rec;
+  std::atomic<int> runs{0};
+
+  TimerId victim = addTimer(
+      [&] {
+        ++runs;
+        rec.record(1);
+      },
+      0.10);
+
+  std::thread canceller([&] { queue_->cancel(victim); });
+  canceller.join();
+
+  addTimer([&] { rec.record(99); }, 0.20); // sentinel: the 100ms window is past
+  ASSERT_TRUE(rec.waitFor(1, kWaitTimeout));
+  EXPECT_EQ(runs.load(), 0);
+  EXPECT_EQ(rec.ids(), (std::vector<long>{99}));
+}
+
 // cancel() removes the timer from the heap by find+erase followed by a full
 // make_heap() rebuild. Both remaining timers have to survive that rebuild.
 TEST_F(TimerQueueTest, CancelKeepsHeapConsistentForRemainingTimers) {
   Recorder rec;
 
   addTimer([&] { rec.record(40); }, 0.04);
-  Timer *middle = addTimer([&] { rec.record(80); }, 0.08);
+  TimerId middle = addTimer([&] { rec.record(80); }, 0.08);
   addTimer([&] { rec.record(120); }, 0.12);
   addTimer([&] { rec.record(99); }, 0.16); // sentinel, after the 80ms window
   queue_->cancel(middle);
@@ -344,7 +439,7 @@ TEST_F(TimerQueueTest, CancelOfAlreadyExpiredTimerInSameBatchIsSafe) {
   Timestamp when = Timestamp::now();
   when += 0.05; // one timestamp for both, so they land in one getExpired() pass
 
-  Timer *victim = addTimerAt([&] { ++victimRuns; }, when);
+  TimerId victim = addTimerAt([&] { ++victimRuns; }, when);
   addTimerAt(
       [&] {
         queue_->cancel(victim);
@@ -357,10 +452,11 @@ TEST_F(TimerQueueTest, CancelOfAlreadyExpiredTimerInSameBatchIsSafe) {
   ASSERT_TRUE(rec.waitFor(2, kWaitTimeout))
       << "cancelling a same-batch expired timer must not take the loop down";
   EXPECT_EQ(rec.ids(), (std::vector<long>{1, 99}));
-  // Only the upper bound is asserted. The current implementation treats this
-  // cancel as a no-op — callingExpiredTimers_ is set but never read — so the
-  // victim usually runs once; a future fix that suppresses a pending callback
-  // would legitimately make this 0. Either way it must never run twice.
+  // Only the upper bound is asserted. getExpired() already extracted the whole
+  // batch before any callback ran, so cancel() cannot un-run a callback that
+  // is still ahead in the batch; it only records the handle so reset() deletes
+  // instead of restarting. The victim runs at most once and must never run
+  // twice.
   EXPECT_LE(victimRuns.load(), 1);
 }
 
