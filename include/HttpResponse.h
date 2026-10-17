@@ -3,6 +3,8 @@
 #include <map>
 #include <string>
 
+namespace reactornet {
+
 class Buffer;
 
 // Builds an HTTP 1.0 response.
@@ -47,3 +49,5 @@ private:
   std::string body_;                           // 响应正文
   bool closeConnection_; // 是否短连接（Connection: close）
 };
+
+} // namespace reactornet

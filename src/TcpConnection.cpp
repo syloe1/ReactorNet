@@ -5,6 +5,8 @@
 #include <iostream>
 #include <unistd.h>
 
+namespace reactornet {
+
 TcpConnection::TcpConnection(EventLoop *loop, const std::string &name,
                              int sockfd, const InetAddress &localAddr,
                              const InetAddress &peerAddr)
@@ -182,3 +184,5 @@ void TcpConnection::forceCloseInLoop() {
     handleClose();
   }
 }
+
+} // namespace reactornet

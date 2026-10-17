@@ -6,6 +6,8 @@
 #include "noncopyable.h"
 #include <functional>
 
+namespace reactornet {
+
 class EventLoop;
 // 管理listen监听fd, 只处理TCP握手
 //  Accepts new TCP connections on a listening socket.
@@ -43,3 +45,5 @@ private:
   bool listening_;                              // 是否已经调用listen开启端口
   int idleFd_; // 预留兜底fd，解决EMFILE fd耗尽崩溃问题
 };
+
+} // namespace reactornet

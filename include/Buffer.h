@@ -5,6 +5,8 @@
 #include <sys/types.h>
 #include <vector>
 
+namespace reactornet {
+
 class Socket;
 
 // Non-contiguous read/write buffer designed for TCP stream processing.
@@ -73,3 +75,5 @@ private:
   size_t readIndex_;  // 标记可读数据的起始位置
   size_t writeIndex_; // 标记可写数据的起始位置
 };
+
+} // namespace reactornet

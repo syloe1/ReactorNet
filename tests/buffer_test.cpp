@@ -8,6 +8,8 @@
 
 #include "Buffer.h"
 
+using namespace reactornet;
+
 // Unit tests for Buffer — the TCP reassembly core.
 //
 // readFd / writeFd are the only places in the library that touch a kernel

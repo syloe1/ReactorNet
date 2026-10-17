@@ -5,6 +5,9 @@
 #include <iostream>
 #include <sys/socket.h>
 #include <unistd.h>
+
+namespace reactornet {
+
 //   EventLoop *loop_;       // 绑定的主线程主Reactor
 //   Socket acceptSocket_;   // 封装listen监听fd
 //   Channel acceptChannel_; // listen fd对应的epoll事件处理器
@@ -79,3 +82,5 @@ void Acceptor::handleRead() {
     }
   }
 }
+
+} // namespace reactornet

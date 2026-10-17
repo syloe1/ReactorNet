@@ -4,6 +4,9 @@
 #include <cstring>
 #include <iostream>
 #include <unistd.h>
+
+namespace reactornet {
+
 /*
 int epollfd_;
 ChannelMap channels_;
@@ -121,3 +124,5 @@ void EPollPoller::fillActiveChannels(int numEvents,
     activeChannels->push_back(channel);
   }
 }
+
+} // namespace reactornet

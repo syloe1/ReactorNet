@@ -9,6 +9,8 @@
 #include <thread>
 #include <vector>
 
+namespace reactornet {
+
 class Channel;
 class Poller;
 class TimerQueue;
@@ -114,3 +116,5 @@ private:
   std::vector<Functor> pendingFunctors_;
   std::mutex mutex_;
 };
+
+} // namespace reactornet

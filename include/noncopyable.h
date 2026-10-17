@@ -1,4 +1,7 @@
 #pragma once
+
+namespace reactornet {
+
 // 工具基类
 class noncopyable {
 public:
@@ -10,3 +13,5 @@ public:
   noncopyable(noncopyable &&) = default;
   noncopyable &operator=(noncopyable &&) = default;
 };
+
+} // namespace reactornet

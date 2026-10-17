@@ -3,6 +3,9 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <string>
+
+namespace reactornet {
+
 // 封装Linux IPV4底层结构体sockaddr_in
 class InetAddress {
 public:
@@ -33,3 +36,5 @@ public:
 private:
   sockaddr_in addr_;
 };
+
+} // namespace reactornet

@@ -6,6 +6,8 @@
 #include <iostream>
 #include <cassert>
 
+namespace reactornet {
+
 TcpServer::TcpServer(EventLoop* loop, const InetAddress& listenAddr,
                      const std::string& name)
     : baseLoop_(loop),
@@ -126,3 +128,5 @@ void TcpServer::removeConnectionInLoop(const TcpConnectionPtr& conn) {
     ioLoop->queueInLoop(
         std::bind(&TcpConnection::connectDestroyed, conn));
 }
+
+} // namespace reactornet

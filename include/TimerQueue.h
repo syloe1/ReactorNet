@@ -7,6 +7,8 @@
 #include <set>
 #include <vector>
 
+namespace reactornet {
+
 class EventLoop;
 
 // Manages a collection of timers using a min-heap.
@@ -59,3 +61,5 @@ private:
 
   bool callingExpiredTimers_; // 正在执行定时回调，防止cancel重入崩溃
 };
+
+} // namespace reactornet

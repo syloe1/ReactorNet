@@ -1,6 +1,9 @@
 #include "InetAddress.h"
 #include <cstring>
 #include <iostream>
+
+namespace reactornet {
+
 /*
 struct sockaddr_in {
   sa_family_t sin_family;  // 协议族， AF_INET IPv4
@@ -61,3 +64,5 @@ std::string InetAddress::toIp() const {
   ::inet_ntop(AF_INET, &addr_.sin_addr, buf, sizeof(buf));
   return buf;
 }
+
+} // namespace reactornet

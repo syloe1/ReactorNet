@@ -5,6 +5,8 @@
 #include <sys/types.h>
 #include <sys/uio.h>
 
+namespace reactornet {
+
 // 封装socket系统调用
 class Socket : noncopyable {
 public:
@@ -55,3 +57,5 @@ public:
 private:
   int sockfd_;
 };
+
+} // namespace reactornet

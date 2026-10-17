@@ -6,6 +6,8 @@
 #include <mutex>
 #include <thread>
 
+namespace reactornet {
+
 class EventLoop;
 
 // Encapsulates a thread that runs an EventLoop.
@@ -29,3 +31,5 @@ private:
   std::mutex mutex_;                    // 保护loop_、exiting_共享变量
   std::condition_variable cond_;        // 同步：主线程等子线程创建loop完成
 };
+
+} // namespace reactornet

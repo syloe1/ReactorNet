@@ -27,6 +27,8 @@
 #include <thread>
 #include <vector>
 
+using namespace reactornet;
+
 // End-to-end tests over a real TCP socket.
 //
 // The other suites in this directory test parts: Buffer moves bytes, TimerQueue

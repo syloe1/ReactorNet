@@ -4,6 +4,8 @@
 #include <iostream>
 #include <sys/epoll.h>
 
+namespace reactornet {
+
 Channel::Channel(EventLoop *loop, int fd)
     : loop_(loop), fd_(fd), events_(0), // 初始不监听任何事件
       revents_(0),                      // 本次触发事件空
@@ -98,3 +100,5 @@ void Channel::tie(const std::shared_ptr<void> &obj) {
   tie_ = obj;   // weak_ptr 托管 shared_ptr的资源， 但 不增加 引用计数
   tied_ = true; // 标记启用保活
 }
+
+} // namespace reactornet

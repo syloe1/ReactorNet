@@ -103,10 +103,16 @@ curl http://localhost:8080/
 
 ## API Example
 
+All public types live in `namespace reactornet`; either add `using namespace reactornet;`
+(as below) or qualify names as `reactornet::EventLoop`.
+
 ```cpp
 #include "TcpServer.h"
 #include "EventLoop.h"
 #include "InetAddress.h"
+
+using namespace reactornet;
+using TcpConnectionPtr = TcpConnection::TcpConnectionPtr;
 
 int main() {
     EventLoop loop;

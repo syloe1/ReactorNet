@@ -10,6 +10,8 @@
 #include <sys/eventfd.h>
 #include <unistd.h>
 
+namespace reactornet {
+
 // Thread-local pointer to the EventLoop for the current thread.
 // nullptr if no EventLoop has been created on this thread.
 //__thread 是GCC拓展关键字， 线程局部存储
@@ -210,3 +212,5 @@ void EventLoop::doPendingFunctors() {
   }
   callingPendingFunctors_ = false;
 }
+
+} // namespace reactornet

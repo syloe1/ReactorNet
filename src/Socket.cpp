@@ -6,6 +6,8 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+namespace reactornet {
+
 // SOCK_CLOEXEC执行exec子进程时自动关闭fd, 避免fd泄露
 Socket::Socket() {
   sockfd_ = ::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC,
@@ -136,3 +138,5 @@ void Socket::close() {
     sockfd_ = -1;
   }
 }
+
+} // namespace reactornet

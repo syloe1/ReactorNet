@@ -3,6 +3,8 @@
 #include <chrono>
 #include <functional>
 
+namespace reactornet {
+
 // Represents a timestamp as microseconds since epoch.
 // Used for timer expiration comparison.
 class Timestamp { // 时间戳类
@@ -101,3 +103,5 @@ private:
 
   static int64_t s_numCreated_; // 全局定时器计数
 };
+
+} // namespace reactornet
