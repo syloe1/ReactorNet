@@ -85,7 +85,7 @@ private:
   using ConnectionMap = std::map<std::string, TcpConnectionPtr>;
   // 收到新TCP连接， 创建TcpConnection对象， 分配IO线程， 加入全局连接表，
   // 正式启用连接
-  void newConnection(int sockfd, const InetAddress &peerAddr);
+  void newConnection(Socket connSocket, const InetAddress &peerAddr);
   // 子线程收到关闭事件， 跨线程投递清理任务到主线程
   void removeConnection(const TcpConnectionPtr &conn);
   // 主线程使用，从map删除连接， 收尾销毁资源

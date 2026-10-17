@@ -47,7 +47,7 @@ public:
 
   // Construct with an already-accepted socket fd and peer address.
   // 循环 连接名字 fd, 本地地址 客户端地址
-  TcpConnection(EventLoop *loop, const std::string &name, int sockfd,
+  TcpConnection(EventLoop *loop, const std::string &name, Socket socket,
                 const InetAddress &localAddr, const InetAddress &peerAddr);
   ~TcpConnection();
 
