@@ -109,6 +109,11 @@ void TimerQueue::cancel(Timer *timer) {
                        Timer::TimerPtrComparator());
       }
       delete timer;
+    } else if (callingExpiredTimers_) {
+      // The timer is in the current expired batch: getExpired() already
+      // removed it from both containers, but reset() still owns the pointer.
+      // Mark it so reset() deletes it instead of restarting a repeating one.
+      cancelingTimers_.insert(timer);
     }
   });
 }
@@ -146,7 +151,11 @@ std::vector<Timer *> TimerQueue::getExpired(Timestamp now) {
 
 void TimerQueue::reset(const std::vector<Timer *> &expired, Timestamp now) {
   for (Timer *timer : expired) {
-    if (timer->repeat()) {
+    // A callback in this batch may have cancelled this timer (including
+    // itself). erase() doubles as the membership test.
+    if (cancelingTimers_.erase(timer) > 0) {
+      delete timer;
+    } else if (timer->repeat()) {
       timer->restart(now);
       insert(timer);
     } else {
