@@ -20,6 +20,7 @@ add_executable(reactornet_tests
     event_loop_test.cpp
     timer_queue_test.cpp
     connector_test.cpp
+    tcp_client_test.cpp
     integration_test.cpp
 )
 

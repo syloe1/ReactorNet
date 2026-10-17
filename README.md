@@ -53,6 +53,7 @@ TcpServer(baseLoop主线程)
 | `TimerQueue` | Min-heap timer management using `timerfd` |
 | `TcpConnection` | TCP connection with input/output buffers, `shared_ptr` lifecycle |
 | `TcpServer` | Multi-reactor server with accept loop and connection management |
+| `TcpClient` | Client entry point: `Connector` handshake + `TcpConnection` lifecycle |
 | `Acceptor` | Listening socket handler, runs in base reactor |
 | `Buffer` | Non-contiguous read/write buffer with prependable space |
 | `Socket` | RAII wrapper around socket fd |
