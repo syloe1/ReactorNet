@@ -81,36 +81,56 @@ TimerQueue::~TimerQueue() {
   }
 }
 
-Timer *TimerQueue::addTimer(TimerCallback cb, Timestamp when, double interval) {
+TimerId TimerQueue::addTimer(TimerCallback cb, Timestamp when,
+                             double interval) {
   Timer *timer = new Timer(std::move(cb), when, interval);
+  TimerId id(timer, timer->sequence());
   loop_->runInLoop([this, timer]() { insert(timer); });
-  return timer;
+  return id;
 }
 
-Timer *TimerQueue::addTimer(TimerCallback cb, double delay, double interval) {
+TimerId TimerQueue::addTimer(TimerCallback cb, double delay, double interval) {
   Timestamp when = Timestamp::now();
   when += delay;
   return addTimer(std::move(cb), when, interval);
 }
 
-void TimerQueue::cancel(Timer *timer) {
-  loop_->runInLoop([this, timer]() {
-    auto it = activeTimers_.find(timer);
-    if (it != activeTimers_.end()) {
-      activeTimers_.erase(it);
-      // Don't delete here; the timer will be in timers_ and cleaned up
-      // when it would have expired, or we leave it and clean up in dtor.
-      // Actually, let's delete immediately for simplicity and safety:
-      // 从堆中删除该timer rebuild the heap
-      auto heapIt = std::find(timers_.begin(), timers_.end(), timer);
-      if (heapIt != timers_.end()) {
-        timers_.erase(heapIt);
-        std::make_heap(timers_.begin(), timers_.end(),
-                       Timer::TimerPtrComparator());
-      }
-      delete timer;
+void TimerQueue::cancel(TimerId timerId) {
+  loop_->runInLoop([this, timerId]() { cancelInLoop(timerId, true); });
+}
+
+void TimerQueue::cancelInLoop(TimerId timerId, bool allowRetry) {
+  auto it = activeTimers_.find(timerId);
+  if (it != activeTimers_.end()) {
+    activeTimers_.erase(it);
+    Timer *timer = timerId.timer();
+    // 从堆中删除该timer rebuild the heap
+    auto heapIt = std::find(timers_.begin(), timers_.end(), timer);
+    if (heapIt != timers_.end()) {
+      timers_.erase(heapIt);
+      std::make_heap(timers_.begin(), timers_.end(),
+                     Timer::TimerPtrComparator());
     }
-  });
+    delete timer;
+    return;
+  }
+
+  if (callingExpiredTimers_ && expiredTimers_.count(timerId) > 0) {
+    // The timer is in the current expired batch: getExpired() already removed
+    // it from both containers, but reset() still holds the pointer. Mark it so
+    // reset() deletes it instead of restarting a repeating one.
+    cancelingTimers_.insert(timerId);
+    return;
+  }
+
+  if (allowRetry) {
+    // Not in the heap and not in the current batch. The timer may still be
+    // waiting for its deferred insert (addTimer posts insertion to this loop;
+    // a cancel executed directly on the loop thread can overtake that post).
+    // Retry once after the pending loop work has run. After that, the handle is
+    // either dead (idempotent no-op) or never existed.
+    loop_->queueInLoop([this, timerId]() { cancelInLoop(timerId, false); });
+  }
 }
 
 void TimerQueue::handleRead(Timestamp /*receiveTime*/) {
@@ -120,6 +140,11 @@ void TimerQueue::handleRead(Timestamp /*receiveTime*/) {
 
   std::vector<Timer *> expired = getExpired(now);
 
+  expiredTimers_.clear();
+  for (Timer *timer : expired) {
+    expiredTimers_.insert(TimerId(timer, timer->sequence()));
+  }
+
   callingExpiredTimers_ = true;
   for (Timer *timer : expired) {
     timer->run();
@@ -127,6 +152,7 @@ void TimerQueue::handleRead(Timestamp /*receiveTime*/) {
   callingExpiredTimers_ = false;
 
   reset(expired, now);
+  expiredTimers_.clear();
 }
 // 去除所有到期定时器
 std::vector<Timer *> TimerQueue::getExpired(Timestamp now) {
@@ -134,7 +160,8 @@ std::vector<Timer *> TimerQueue::getExpired(Timestamp now) {
 
   while (!timers_.empty() && timers_.front()->expiration() <= now) {
     // Remove from active set if present
-    activeTimers_.erase(timers_.front());
+    activeTimers_.erase(
+        TimerId(timers_.front(), timers_.front()->sequence()));
 
     std::pop_heap(timers_.begin(), timers_.end(), Timer::TimerPtrComparator());
     expired.push_back(timers_.back());
@@ -146,7 +173,14 @@ std::vector<Timer *> TimerQueue::getExpired(Timestamp now) {
 
 void TimerQueue::reset(const std::vector<Timer *> &expired, Timestamp now) {
   for (Timer *timer : expired) {
-    if (timer->repeat()) {
+    // A callback in this batch may have cancelled this timer (including
+    // itself). erase() doubles as the membership test. Matching on the full
+    // TimerId (pointer + sequence) also rejects a stale handle for a different
+    // Timer allocated at the same address.
+    const TimerId id(timer, timer->sequence());
+    if (cancelingTimers_.erase(id) > 0) {
+      delete timer;
+    } else if (timer->repeat()) {
       timer->restart(now);
       insert(timer);
     } else {
@@ -172,7 +206,7 @@ bool TimerQueue::insert(Timer *timer) {
 
   timers_.push_back(timer);
   std::push_heap(timers_.begin(), timers_.end(), Timer::TimerPtrComparator());
-  activeTimers_.insert(timer);
+  activeTimers_.insert(TimerId(timer, timer->sequence()));
 
   if (earliestChanged) {
     resetTimerfd(timerfd_, timer->expiration());

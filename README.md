@@ -70,6 +70,23 @@ make -j$(nproc)
 
 All examples are run from the `build/` directory.
 
+### Sanitizers
+
+ASan/UBSan and TSan cannot be enabled in the same binary, so each gets its own
+build tree:
+
+```bash
+cmake -B build-asan -DBUILD_TESTING=ON -DSANITIZER=address
+cmake --build build-asan -j"$(nproc)"
+ctest --test-dir build-asan --output-on-failure
+
+cmake -B build-tsan -DBUILD_TESTING=ON -DSANITIZER=thread
+cmake --build build-tsan -j"$(nproc)"
+ctest --test-dir build-tsan --output-on-failure
+```
+
+Both run on every pull request as the `Sanitizers` CI jobs.
+
 ### Git blame
 
 `.git-blame-ignore-revs` excludes the mechanical namespace refactor from

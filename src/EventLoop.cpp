@@ -1,6 +1,5 @@
 #include "EventLoop.h"
 #include "Channel.h"
-#include "EPollPoller.h"
 #include "Poller.h"
 #include "TimerQueue.h"
 #include <cassert>
@@ -47,7 +46,8 @@ static IgnoreSigPipe initObj;
 EventLoop::EventLoop()
     : looping_(false), quit_(false), eventHandling_(false),
       callingPendingFunctors_(false), iteration_(0),
-      threadId_(std::this_thread::get_id()), poller_(new EPollPoller(this)),
+      threadId_(std::this_thread::get_id()),
+      poller_(Poller::newDefaultPoller(this)),
       timerQueue_(new TimerQueue(this)), wakeupFd_(createEventfd()),
       wakeupChannel_(new Channel(this, wakeupFd_)) {
   // 校验：当前线程不能已有EventLoop
@@ -139,6 +139,26 @@ void EventLoop::queueInLoop(Functor cb) {
     wakeup();
   }
 }
+
+// Timer facade. TimerQueue::addTimer() posts the heap insertion through
+// runInLoop(), which is exactly the semantics promised here: inline on the loop
+// thread, queued plus wakeup from anywhere else. addTimer builds the Timer on
+// the calling thread, so only the insertion crosses the thread boundary.
+TimerId EventLoop::runAt(Timestamp when, Functor cb) {
+  return timerQueue_->addTimer(std::move(cb), when, 0.0);
+}
+
+TimerId EventLoop::runAfter(double delaySeconds, Functor cb) {
+  return timerQueue_->addTimer(std::move(cb), delaySeconds, 0.0);
+}
+
+// A repeating timer's first expiry is one interval out, matching runAfter()'s
+// delay semantics.
+TimerId EventLoop::runEvery(double intervalSeconds, Functor cb) {
+  return timerQueue_->addTimer(std::move(cb), intervalSeconds, intervalSeconds);
+}
+
+void EventLoop::cancelTimer(TimerId timerId) { timerQueue_->cancel(timerId); }
 
 void EventLoop::updateChannel(Channel *channel) {
   assert(channel->ownerLoop() == this);
