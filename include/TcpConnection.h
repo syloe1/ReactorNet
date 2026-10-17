@@ -10,6 +10,8 @@
 #include <memory>
 #include <string>
 
+namespace reactornet {
+
 class EventLoop;
 
 // Represents a single TCP connection. Managed via shared_ptr.
@@ -118,3 +120,5 @@ private:
   WriteCompleteCallback writeCompleteCallback_;
   CloseCallback closeCallback_;
 };
+
+} // namespace reactornet

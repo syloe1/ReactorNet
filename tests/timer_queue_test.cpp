@@ -15,6 +15,8 @@
 #include <thread>
 #include <vector>
 
+using namespace reactornet;
+
 // Unit tests for TimerQueue — the min-heap + timerfd pairing.
 //
 // Two properties here are invisible to anyone reading the code, and both fail

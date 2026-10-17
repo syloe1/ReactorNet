@@ -6,6 +6,8 @@
 #include <sys/timerfd.h>
 #include <unistd.h>
 
+namespace reactornet {
+
 //   EventLoop *const loop_;  // 所属事件循环，永久绑定，禁止跨线程操作
 //   const int timerfd_;      // Linux内核定时器fd，创建后不变
 //   Channel timerfdChannel_; // 绑定timerfd，监听到期读事件
@@ -178,3 +180,5 @@ bool TimerQueue::insert(Timer *timer) {
 
   return earliestChanged;
 }
+
+} // namespace reactornet

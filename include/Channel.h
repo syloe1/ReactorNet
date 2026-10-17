@@ -6,6 +6,8 @@
 #include <memory>
 #include <sys/epoll.h>
 
+namespace reactornet {
+
 class EventLoop;
 
 // Channel is the core event dispatcher. It does NOT own the fd;
@@ -110,3 +112,5 @@ private:
   EventCallback closeCallback_;
   EventCallback errorCallback_;
 };
+
+} // namespace reactornet

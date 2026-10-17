@@ -5,6 +5,8 @@
 #include <iostream>
 #include <sstream>
 
+namespace reactornet {
+
 // Simple URL decode: %XX -> character
 std::string HttpRequest::urlDecode(const std::string &input) const {
   std::string result;
@@ -163,3 +165,5 @@ std::string HttpRequest::getHeader(const std::string &field) const {
   }
   return "";
 }
+
+} // namespace reactornet

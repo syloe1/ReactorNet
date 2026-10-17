@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+namespace reactornet {
+
 class EventLoop;
 class Acceptor;
 class EventLoopThread;
@@ -110,3 +112,5 @@ private:
 
   ConnectionMap connections_; // 连接名字 -> TcpConnectionPtr
 };
+
+} // namespace reactornet

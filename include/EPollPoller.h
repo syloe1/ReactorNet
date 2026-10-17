@@ -3,6 +3,9 @@
 #include "Poller.h"
 #include <sys/epoll.h>
 #include <vector>
+
+namespace reactornet {
+
 // 父类Poller的linux专属实现
 //  Epoll-based I/O multiplexing implementation.
 class EPollPoller : public Poller {
@@ -35,3 +38,5 @@ private:
                         //  using EventList = std::vector<epoll_event>;
   EventList events_;    // epoll_wait result buffer
 };
+
+} // namespace reactornet

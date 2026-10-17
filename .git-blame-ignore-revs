@@ -1,0 +1,3 @@
+# refactor: wrap library code in namespace reactornet (#19)
+# Purely mechanical: namespace delimiters and using-directives.
+cee0cf10ab03be4c6a4bd179cfaf019b28e26823

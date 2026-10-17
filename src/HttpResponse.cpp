@@ -2,6 +2,8 @@
 #include "Buffer.h"
 #include <cstdio>
 
+namespace reactornet {
+
 std::string HttpResponse::statusMessageForCode(HttpStatusCode code) const {
     switch (code) {
         case k200Ok: return "OK";
@@ -45,3 +47,5 @@ void HttpResponse::appendToBuffer(Buffer* output) const {
     // Body
     output->append(body_);
 }
+
+} // namespace reactornet

@@ -10,6 +10,8 @@
 #include <mutex>
 #include <thread>
 
+using namespace reactornet;
+
 // Unit tests for EventLoop's cross-thread dispatch — pendingFunctors_ + mutex_,
 // the eventfd wakeup, and doPendingFunctors()'s swap semantics.
 //

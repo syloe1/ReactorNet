@@ -3,6 +3,7 @@
 #include "InetAddress.h"
 #include "TcpServer.h"
 #include <iostream>
+using namespace reactornet;
 using TcpConnectionPtr = TcpConnection::TcpConnectionPtr;
 
 // --- Echo Server ---

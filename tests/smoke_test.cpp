@@ -2,6 +2,8 @@
 
 #include "Buffer.h"
 
+using namespace reactornet;
+
 // Smoke test only. Its job is to prove the wiring end to end: that the test
 // target builds, links against reactornet, and can drive real library code.
 // Per-module tests live in sibling files.

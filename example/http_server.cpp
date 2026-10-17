@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+using namespace reactornet;
 using TcpConnectionPtr = TcpConnection::TcpConnectionPtr;
 
 // --- HTTP Server ---

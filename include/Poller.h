@@ -5,6 +5,8 @@
 #include <unordered_map>
 #include <vector>
 
+namespace reactornet {
+
 class Channel;
 class EventLoop;
 
@@ -42,3 +44,5 @@ protected:
   // const修饰指针， 指针一旦初始化， 不能再指向别的EventLoop对象
   EventLoop *const ownerLoop_;
 };
+
+} // namespace reactornet

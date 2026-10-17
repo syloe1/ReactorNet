@@ -1,6 +1,8 @@
 #include "EventLoopThread.h"
 #include "EventLoop.h"
 
+namespace reactornet {
+
 EventLoopThread::EventLoopThread() : loop_(nullptr), exiting_(false) {}
 
 EventLoopThread::~EventLoopThread() {
@@ -41,3 +43,5 @@ void EventLoopThread::threadFunc() {
   std::lock_guard<std::mutex> lock(mutex_);
   loop_ = nullptr;
 }
+
+} // namespace reactornet

@@ -4,6 +4,8 @@
 #include <map>
 #include <string>
 
+namespace reactornet {
+
 // Simple HTTP 1.0 request parser.
 // Only supports GET method.
 class HttpRequest {
@@ -37,3 +39,5 @@ private:
   int majorVersion_;                           // HTTP主版本，固定1
   int minorVersion_;                           // HTTP次版本，固定0
 };
+
+} // namespace reactornet

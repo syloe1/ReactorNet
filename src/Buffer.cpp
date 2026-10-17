@@ -6,6 +6,8 @@
 #include <sys/uio.h>
 #include <unistd.h>
 
+namespace reactornet {
+
 Buffer::Buffer(size_t initialSize)
     : buffer_(kCheapPrepend + initialSize), readIndex_(kCheapPrepend),
       writeIndex_(kCheapPrepend) {}
@@ -133,3 +135,5 @@ void Buffer::makeSpace(size_t len) {
     writeIndex_ = readIndex_ + readable;
   }
 }
+
+} // namespace reactornet

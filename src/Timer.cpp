@@ -1,5 +1,7 @@
 #include "Timer.h"
 
+namespace reactornet {
+
 int64_t Timer::s_numCreated_ = 0;
 
 void Timer::restart(Timestamp now) {
@@ -11,3 +13,5 @@ void Timer::restart(Timestamp now) {
     expiration_ = Timestamp();
   }
 }
+
+} // namespace reactornet

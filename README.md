@@ -70,6 +70,17 @@ make -j$(nproc)
 
 All examples are run from the `build/` directory.
 
+### Git blame
+
+`.git-blame-ignore-revs` excludes the mechanical namespace refactor from
+`git blame`. Enable it locally with:
+
+```bash
+git config blame.ignoreRevsFile .git-blame-ignore-revs
+```
+
+GitHub applies the file automatically.
+
 ### Echo Server
 
 ```bash
@@ -103,10 +114,16 @@ curl http://localhost:8080/
 
 ## API Example
 
+All public types live in `namespace reactornet`; either add `using namespace reactornet;`
+(as below) or qualify names as `reactornet::EventLoop`.
+
 ```cpp
 #include "TcpServer.h"
 #include "EventLoop.h"
 #include "InetAddress.h"
+
+using namespace reactornet;
+using TcpConnectionPtr = TcpConnection::TcpConnectionPtr;
 
 int main() {
     EventLoop loop;
