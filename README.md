@@ -70,6 +70,17 @@ make -j$(nproc)
 
 All examples are run from the `build/` directory.
 
+### Git blame
+
+`.git-blame-ignore-revs` excludes the mechanical namespace refactor from
+`git blame`. Enable it locally with:
+
+```bash
+git config blame.ignoreRevsFile .git-blame-ignore-revs
+```
+
+GitHub applies the file automatically.
+
 ### Echo Server
 
 ```bash
