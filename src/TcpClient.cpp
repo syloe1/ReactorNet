@@ -1,6 +1,7 @@
 #include "TcpClient.h"
 #include "Connector.h"
 #include "EventLoop.h"
+#include "Socket.h"
 #include <cstdio>
 #include <cstring>
 #include <netinet/in.h>
@@ -115,7 +116,7 @@ void TcpClient::newConnection(int sockfd) {
                 nextConnId_++);
 
   TcpConnectionPtr conn = std::make_shared<TcpConnection>(
-      loop_, name_ + suffix, sockfd,
+      loop_, name_ + suffix, Socket(sockfd),
       haveLocal ? InetAddress(localAddr) : InetAddress(),
       havePeer ? InetAddress(peerAddr) : serverAddr_);
 

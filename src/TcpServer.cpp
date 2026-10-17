@@ -69,11 +69,16 @@ std::vector<EventLoop*> TcpServer::getAllLoops() {
     return result;
 }
 
-uint16_t TcpServer::listenPort() const {
-    return acceptor_->listenAddress().toPort();
+InetAddress TcpServer::listenAddress() const {
+    baseLoop_->assertInLoopThread();
+    return acceptor_->listenAddress();
 }
 
-void TcpServer::newConnection(int sockfd, const InetAddress& peerAddr) {
+uint16_t TcpServer::listenPort() const {
+    return listenAddress().toPort();
+}
+
+void TcpServer::newConnection(Socket connSocket, const InetAddress& peerAddr) {
     baseLoop_->assertInLoopThread();
 
     // Round-robin selection of an event loop
@@ -91,12 +96,13 @@ void TcpServer::newConnection(int sockfd, const InetAddress& peerAddr) {
     sockaddr_in localAddr;
     socklen_t addrLen = sizeof(localAddr);
     std::memset(&localAddr, 0, sizeof(localAddr));
-    if (::getsockname(sockfd, reinterpret_cast<sockaddr*>(&localAddr), &addrLen) < 0) {
+    if (::getsockname(connSocket.fd(), reinterpret_cast<sockaddr*>(&localAddr), &addrLen) < 0) {
         std::cerr << "[TcpServer] getsockname failed: " << strerror(errno) << std::endl;
     }
     InetAddress localInetAddr(localAddr);
 
-    TcpConnectionPtr conn(new TcpConnection(ioLoop, connName, sockfd,
+    TcpConnectionPtr conn(new TcpConnection(ioLoop, connName,
+                                            std::move(connSocket),
                                             localInetAddr, peerAddr));
 
     connections_[connName] = conn;

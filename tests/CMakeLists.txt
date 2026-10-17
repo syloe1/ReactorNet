@@ -17,10 +17,13 @@ FetchContent_MakeAvailable(googletest)
 add_executable(reactornet_tests
     smoke_test.cpp
     buffer_test.cpp
+    socket_test.cpp
     event_loop_test.cpp
     timer_queue_test.cpp
     connector_test.cpp
     tcp_client_test.cpp
+    tcp_connection_test.cpp
+    listen_address_test.cpp
     integration_test.cpp
 )
 
@@ -36,3 +39,7 @@ include(GoogleTest)
 # hang is reported as a ctest failure rather than holding the CI job open until
 # the runner's own limit. Applies to the unit suites too, which are far quicker.
 gtest_discover_tests(reactornet_tests PROPERTIES TIMEOUT 60)
+
+# RPC has its own test binary and library target. It is added after the
+# core's test target so GTest::gtest_main already exists.
+add_subdirectory(rpc)

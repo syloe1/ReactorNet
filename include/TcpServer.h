@@ -72,10 +72,17 @@ public:
   EventLoop *getLoop() const { return baseLoop_; }
   std::vector<EventLoop *> getAllLoops();
 
-  // The port the listening socket is bound to. The Acceptor binds in the
-  // TcpServer constructor, so this is already meaningful before start();
-  // it is how a caller that asked for port 0 learns which port the kernel
-  // handed out. Same thread-affinity caveat as the rest of the acceptor.
+  // The address the listening socket is actually bound to, including the port
+  // the kernel picked when the constructor was given port 0.
+  //
+  // Contract: must be called on the base loop thread, after start(). start()
+  // posts listen() to that loop, and exposing a single loop-thread-only entry
+  // point keeps this consistent with the acceptor it forwards to. (The port is
+  // assigned at bind time in the constructor, but callers should not rely on
+  // reading it before the server has been started.)
+  InetAddress listenAddress() const;
+
+  // Convenience shorthand for listenAddress().toPort(). Same contract.
   uint16_t listenPort() const;
 
 private:
@@ -85,7 +92,7 @@ private:
   using ConnectionMap = std::map<std::string, TcpConnectionPtr>;
   // 收到新TCP连接， 创建TcpConnection对象， 分配IO线程， 加入全局连接表，
   // 正式启用连接
-  void newConnection(int sockfd, const InetAddress &peerAddr);
+  void newConnection(Socket connSocket, const InetAddress &peerAddr);
   // 子线程收到关闭事件， 跨线程投递清理任务到主线程
   void removeConnection(const TcpConnectionPtr &conn);
   // 主线程使用，从map删除连接， 收尾销毁资源
