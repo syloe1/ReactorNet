@@ -30,6 +30,20 @@ void Socket::bind(const InetAddress &addr) {
   }
 }
 
+bool Socket::getLocalAddr(InetAddress *addr) const {
+  sockaddr_in localAddr;
+  socklen_t addrLen = sizeof(localAddr);
+  std::memset(&localAddr, 0, sizeof(localAddr));
+  if (::getsockname(sockfd_, reinterpret_cast<sockaddr *>(&localAddr),
+                    &addrLen) < 0) {
+    std::cerr << "[Socket] getsockname failed: " << strerror(errno)
+              << std::endl;
+    return false;
+  }
+  addr->setSockAddr(localAddr);
+  return true;
+}
+
 void Socket::listen(int backlog) {
   // listen（fd, 队列长度）
   int ret = ::listen(sockfd_, backlog);

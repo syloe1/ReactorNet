@@ -69,8 +69,13 @@ std::vector<EventLoop*> TcpServer::getAllLoops() {
     return result;
 }
 
+InetAddress TcpServer::listenAddress() const {
+    baseLoop_->assertInLoopThread();
+    return acceptor_->listenAddress();
+}
+
 uint16_t TcpServer::listenPort() const {
-    return acceptor_->listenAddress().toPort();
+    return listenAddress().toPort();
 }
 
 void TcpServer::newConnection(int sockfd, const InetAddress& peerAddr) {

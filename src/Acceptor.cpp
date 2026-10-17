@@ -1,6 +1,5 @@
 #include "Acceptor.h"
 #include "EventLoop.h"
-#include <cstring>
 #include <fcntl.h>
 #include <iostream>
 #include <sys/socket.h>
@@ -42,15 +41,12 @@ void Acceptor::listen() {
 }
 
 InetAddress Acceptor::listenAddress() const {
-  sockaddr_in addr;
-  socklen_t addrLen = sizeof(addr);
-  std::memset(&addr, 0, sizeof(addr));
-  if (::getsockname(acceptSocket_.fd(), reinterpret_cast<sockaddr *>(&addr),
-                    &addrLen) < 0) {
-    std::cerr << "[Acceptor] getsockname failed: " << strerror(errno)
-              << std::endl;
-  }
-  return InetAddress(addr);
+  // The constructor bound the socket, so getsockname already reports the final
+  // port even before listen(). A failure here is reported by Socket and maps to
+  // the documented 0.0.0.0:0 fallback.
+  InetAddress addr;
+  acceptSocket_.getLocalAddr(&addr);
+  return addr;
 }
 
 void Acceptor::handleRead() {
