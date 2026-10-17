@@ -59,7 +59,13 @@ private:
   TimerList timers_;            // vector实现最小堆，存储所有定时任务
   ActiveTimerSet activeTimers_; // set红黑树，快速查找Timer，用于cancel取消
 
-  bool callingExpiredTimers_; // 正在执行定时回调，防止cancel重入崩溃
+  bool callingExpiredTimers_; // 正在执行定时回调
+
+  // Timers cancelled from inside a callback that is part of the current
+  // expired batch. They are already out of timers_/activeTimers_, so cancel()
+  // cannot delete them immediately — reset() still holds the pointer. Record
+  // them here and let reset() delete instead of restart.
+  std::set<Timer *> cancelingTimers_;
 };
 
 } // namespace reactornet

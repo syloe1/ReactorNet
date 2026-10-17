@@ -1,6 +1,5 @@
 #include "EventLoop.h"
 #include "Channel.h"
-#include "EPollPoller.h"
 #include "Poller.h"
 #include "TimerQueue.h"
 #include <cassert>
@@ -47,7 +46,8 @@ static IgnoreSigPipe initObj;
 EventLoop::EventLoop()
     : looping_(false), quit_(false), eventHandling_(false),
       callingPendingFunctors_(false), iteration_(0),
-      threadId_(std::this_thread::get_id()), poller_(new EPollPoller(this)),
+      threadId_(std::this_thread::get_id()),
+      poller_(Poller::newDefaultPoller(this)),
       timerQueue_(new TimerQueue(this)), wakeupFd_(createEventfd()),
       wakeupChannel_(new Channel(this, wakeupFd_)) {
   // 校验：当前线程不能已有EventLoop

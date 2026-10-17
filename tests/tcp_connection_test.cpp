@@ -119,7 +119,7 @@ protected:
       // only publishes the raw pointer after construction, for the test thread
       // to call thread-safe methods on.
       owner_ = std::make_shared<TcpConnection>(loop_, "TcpConnectionSendTest",
-                                               server, local, peer);
+                                               Socket(server), local, peer);
       conn_ = owner_.get();
       owner_->connectEstablished();
       ready->set_value();

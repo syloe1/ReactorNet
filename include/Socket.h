@@ -32,6 +32,13 @@ public:
   int fd() const { return sockfd_; }
   // 绑定IP + 端口
   void bind(const InetAddress &addr);
+
+  // Query the address the socket is actually bound to (getsockname).
+  // Returns false and leaves *addr untouched if the syscall fails.
+  // On a socket bound with port 0 this reports the port the kernel assigned —
+  // after bind(), not after listen(), because bind() performs the assignment.
+  // 查询内核实际分配的本地地址（端口 0 时用于取回真实端口）
+  bool getLocalAddr(InetAddress *addr) const;
   // backlog未完成3次握手的连接队列最大长度
   // bind后accept前使用
   void listen(int bakclog = SOMAXCONN);
