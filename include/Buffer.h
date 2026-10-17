@@ -5,6 +5,8 @@
 #include <sys/types.h>
 #include <vector>
 
+class Socket;
+
 // Non-contiguous read/write buffer designed for TCP stream processing.
 // Uses prependable + readable + writable layout:
 //   [prependable (8 bytes)] [readable bytes] [writable bytes]
@@ -37,6 +39,12 @@ public:
                                             // 存入当前buffer
   ssize_t writeFd(int fd, int *savedErrno); // 把buffer可读数据写入socket fd
 
+  // 经 Socket 封装的同一组操作。与上面的 fd 版行为完全一致，
+  // 只是把系统调用换成 Socket::readv / Socket::write，
+  // 让调用方（TcpConnection）的 I/O 路径不再出现裸 fd。
+  ssize_t readFrom(Socket &sock, int *savedErrno);
+  ssize_t writeTo(Socket &sock, int *savedErrno);
+
   // write写入接口
   void append(const char *data, size_t len);
   void append(const std::string &str);
@@ -57,6 +65,10 @@ private:
   // 只读指针
   const char *begin() const { return buffer_.data(); }
   void makeSpace(size_t len);
+  // fd 版与 Socket 版的共同实现：iovec 组装、溢出处理、errno 保存只写一份。
+  // fd >= 0 时走系统调用，sock != nullptr 时走 Socket 封装，二者互斥。
+  ssize_t readCore(int fd, Socket *sock, int *savedErrno);
+  ssize_t writeCore(int fd, Socket *sock, int *savedErrno);
   std::vector<char> buffer_;
   size_t readIndex_;  // 标记可读数据的起始位置
   size_t writeIndex_; // 标记可写数据的起始位置

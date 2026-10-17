@@ -1,4 +1,5 @@
 #include "Buffer.h"
+#include "Socket.h"
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
@@ -51,11 +52,11 @@ void Buffer::ensureWritableBytes(size_t len) {
   }
 }
 
-// Read from fd using readv: first into writable buffer space,
-// then into a stack buffer (64KB) if more data is available.
+// Shared by readFd and readFrom. Read using readv: first into writable buffer
+// space, then into a stack buffer (64KB) if more data is available.
 // This avoids premature buffer growth for large reads.
-ssize_t Buffer::readFd(int fd, int *savedErrno) {
-  char extrabuf[65536]; // 64KB【‘ “
+ssize_t Buffer::readCore(int fd, Socket *sock, int *savedErrno) {
+  char extrabuf[65536]; // 64KB
   const size_t writable = writableBytes();
   // struct iovec
   //   {
@@ -70,7 +71,7 @@ ssize_t Buffer::readFd(int fd, int *savedErrno) {
   vec[1].iov_len = sizeof(extrabuf);
 
   const int iovcnt = (writable < sizeof(extrabuf)) ? 2 : 1;
-  ssize_t n = ::readv(fd, vec, iovcnt);
+  ssize_t n = sock ? sock->readv(vec, iovcnt) : ::readv(fd, vec, iovcnt);
   if (n < 0) {
     *savedErrno = errno;
   } else if (static_cast<size_t>(n) <= writable) {
@@ -84,14 +85,32 @@ ssize_t Buffer::readFd(int fd, int *savedErrno) {
   return n;
 }
 
-ssize_t Buffer::writeFd(int fd, int *savedErrno) {
-  ssize_t n = ::write(fd, peek(), readableBytes());
+// Shared by writeFd and writeTo.
+ssize_t Buffer::writeCore(int fd, Socket *sock, int *savedErrno) {
+  ssize_t n = sock ? sock->write(peek(), readableBytes())
+                   : ::write(fd, peek(), readableBytes());
   if (n < 0) {
     *savedErrno = errno;
   } else {
     retrieve(n);
   }
   return n;
+}
+
+ssize_t Buffer::readFd(int fd, int *savedErrno) {
+  return readCore(fd, nullptr, savedErrno);
+}
+
+ssize_t Buffer::readFrom(Socket &sock, int *savedErrno) {
+  return readCore(-1, &sock, savedErrno);
+}
+
+ssize_t Buffer::writeFd(int fd, int *savedErrno) {
+  return writeCore(fd, nullptr, savedErrno);
+}
+
+ssize_t Buffer::writeTo(Socket &sock, int *savedErrno) {
+  return writeCore(-1, &sock, savedErrno);
 }
 
 const char *Buffer::findCRLF() const {
