@@ -37,7 +37,7 @@ TcpClient::~TcpClient() {
   TcpConnectionPtr conn = std::move(connection_);
   // The close callback points back at this object. It must not survive us:
   // forceClose() below defers through the loop queue and may run later.
-  conn->setCloseCallback([](const TcpConnectionPtr &) {});
+  conn->setCloseCallback([](const Transport::TransportPtr &) {});
 
   if (conn->connected()) {
     // On the loop thread this tears the channel down synchronously and marks
@@ -126,8 +126,11 @@ void TcpClient::newConnection(int sockfd) {
   conn->setConnectionCallback(connectionCallback_);
   conn->setMessageCallback(messageCallback_);
   conn->setWriteCompleteCallback(writeCompleteCallback_);
-  conn->setCloseCallback(
-      [this](const TcpConnectionPtr &c) { removeConnection(c); });
+  // TcpConnection exposes Transport callbacks; this class still tracks the
+  // concrete connection, so narrow back to TcpConnection.
+  conn->setCloseCallback([this](const Transport::TransportPtr &c) {
+    removeConnection(std::dynamic_pointer_cast<TcpConnection>(c));
+  });
 
   conn->connectEstablished();
 }

@@ -24,10 +24,10 @@ TcpServer::TcpServer(EventLoop* loop, const InetAddress& listenAddr,
 TcpServer::~TcpServer() {
     baseLoop_->assertInLoopThread();
     for (auto& conn : connections_) {
-        TcpConnectionPtr connPtr(conn.second);
+        TransportPtr connPtr(conn.second);
         conn.second.reset();
         connPtr->getLoop()->runInLoop(
-            std::bind(&TcpConnection::connectDestroyed, connPtr));
+            std::bind(&Transport::connectDestroyed, connPtr));
     }
 }
 
@@ -119,12 +119,12 @@ void TcpServer::newConnection(Socket connSocket, const InetAddress& peerAddr) {
         std::bind(&TcpConnection::connectEstablished, conn));
 }
 
-void TcpServer::removeConnection(const TcpConnectionPtr& conn) {
+void TcpServer::removeConnection(const TransportPtr& conn) {
     baseLoop_->runInLoop(
         std::bind(&TcpServer::removeConnectionInLoop, this, conn));
 }
 
-void TcpServer::removeConnectionInLoop(const TcpConnectionPtr& conn) {
+void TcpServer::removeConnectionInLoop(const TransportPtr& conn) {
     baseLoop_->assertInLoopThread();
     size_t n = connections_.erase(conn->name());
     (void)n;
@@ -132,7 +132,7 @@ void TcpServer::removeConnectionInLoop(const TcpConnectionPtr& conn) {
 
     EventLoop* ioLoop = conn->getLoop();
     ioLoop->queueInLoop(
-        std::bind(&TcpConnection::connectDestroyed, conn));
+        std::bind(&Transport::connectDestroyed, conn));
 }
 
 } // namespace reactornet

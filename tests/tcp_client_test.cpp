@@ -6,6 +6,7 @@
 #include "InetAddress.h"
 #include "TcpClient.h"
 #include "TcpServer.h"
+#include "Transport.h"
 
 #include <arpa/inet.h>
 #include <cerrno>
@@ -83,6 +84,7 @@ int makeRefusingSocket(uint16_t *port) {
 class TcpClientTest : public ::testing::Test {
 protected:
   using TcpConnectionPtr = TcpConnection::TcpConnectionPtr;
+  using TransportPtr = Transport::TransportPtr;
 
   void SetUp() override {
     loop_ = thread_.startLoop();
@@ -109,7 +111,8 @@ protected:
     loop_->runInLoop([this, ready] {
       server_ = std::make_unique<TcpServer>(
           loop_, InetAddress(0, "127.0.0.1"), "TcpClientTestServer");
-      server_->setConnectionCallback([this](const TcpConnectionPtr &conn) {
+      server_->setConnectionCallback([this](const TransportPtr &transport) {
+        auto conn = std::dynamic_pointer_cast<TcpConnection>(transport);
         {
           std::lock_guard<std::mutex> lock(mutex_);
           if (conn->connected()) {
@@ -127,7 +130,8 @@ protected:
         cv_.notify_all();
       });
       server_->setMessageCallback(
-          [this](const TcpConnectionPtr &conn, Buffer *buf, Timestamp) {
+          [this](const TransportPtr &transport, Buffer *buf, Timestamp) {
+            auto conn = std::dynamic_pointer_cast<TcpConnection>(transport);
             const std::string data = buf->retrieveAllAsString();
             {
               std::lock_guard<std::mutex> lock(mutex_);
@@ -154,7 +158,8 @@ protected:
       client_ = std::make_unique<TcpClient>(loop_,
                                             InetAddress(port, "127.0.0.1"),
                                             "TcpClientTestClient");
-      client_->setConnectionCallback([this](const TcpConnectionPtr &conn) {
+      client_->setConnectionCallback([this](const TransportPtr &transport) {
+        auto conn = std::dynamic_pointer_cast<TcpConnection>(transport);
         {
           std::lock_guard<std::mutex> lock(mutex_);
           if (conn->connected()) {
@@ -171,7 +176,7 @@ protected:
         cv_.notify_all();
       });
       client_->setMessageCallback(
-          [this](const TcpConnectionPtr &, Buffer *buf, Timestamp) {
+          [this](const TransportPtr &, Buffer *buf, Timestamp) {
             {
               std::lock_guard<std::mutex> lock(mutex_);
               clientMessages_.push_back(buf->retrieveAllAsString());

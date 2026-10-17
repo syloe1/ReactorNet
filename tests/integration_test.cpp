@@ -16,6 +16,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -68,7 +69,7 @@ namespace {
 
 using namespace std::chrono_literals;
 
-using TcpConnectionPtr = TcpConnection::TcpConnectionPtr;
+using TransportPtr = Transport::TransportPtr;
 
 // Every round trip in this file gets this long. Real latencies on loopback are
 // microseconds, so this is pure headroom: it is short enough that a broken case
@@ -265,6 +266,50 @@ public:
     return true;
   }
 
+  // Waits for the server to close its write side. Any byte arriving before the
+  // FIN is a failure: callers use this after a known payload, so extra data
+  // means the server sent more than the contract allows.
+  bool expectEof(std::string *error) {
+    const auto deadline = std::chrono::steady_clock::now() + kDeadline;
+    char buf[64];
+    while (true) {
+      const ssize_t n = ::recv(fd_, buf, sizeof(buf), 0);
+      if (n == 0) {
+        return true;
+      }
+      if (n > 0) {
+        *error = "received " + std::to_string(n) + " unexpected byte(s) before EOF";
+        return false;
+      }
+      if (errno == EINTR) {
+        continue;
+      }
+      if (errno == ECONNRESET) {
+        // A forced close may surface as RST rather than FIN.
+        return true;
+      }
+      if (errno != EAGAIN && errno != EWOULDBLOCK) {
+        *error = std::string("recv: ") + std::strerror(errno);
+        return false;
+      }
+      const auto now = std::chrono::steady_clock::now();
+      if (now >= deadline) {
+        *error = "timed out waiting for EOF";
+        return false;
+      }
+      const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+          deadline - now);
+      pollfd pfd{fd_, POLLIN, 0};
+      const int rc = ::poll(&pfd, 1, static_cast<int>(remaining.count()));
+      if (rc < 0 && errno != EINTR) {
+        *error = std::string("poll: ") + std::strerror(errno);
+        return false;
+      }
+      // rc == 0 is a timeout for the next iteration to report. rc > 0 may be
+      // POLLIN or POLLHUP; either way recv() now reveals data, EOF or an error.
+    }
+  }
+
   void close() {
     if (fd_ >= 0) {
       ::close(fd_);
@@ -328,9 +373,70 @@ std::string makePayload(size_t len, uint32_t seed) {
   return payload;
 }
 
+// Compares by offset rather than dumping multi-megabyte strings on failure.
+void expectSameBytes(const std::string &expected, const std::string &actual) {
+  size_t difference = 0;
+  while (difference < expected.size() && difference < actual.size() &&
+         actual[difference] == expected[difference]) {
+    ++difference;
+  }
+  EXPECT_EQ(actual.size(), expected.size())
+      << "first divergence at byte " << difference;
+  EXPECT_EQ(difference, expected.size())
+      << "bytes diverged at offset " << difference << " of " << expected.size();
+}
+
 // Echoes whatever arrives, the standard identity callback.
-void echoBack(const TcpConnectionPtr &conn, Buffer *buf, Timestamp) {
+void echoBack(const TransportPtr &conn, Buffer *buf, Timestamp) {
   conn->send(buf->retrieveAllAsString());
+}
+
+// Hands the server-side connection to the test thread. The connection callback
+// fires on a worker loop, so the hand-off goes through a condition variable
+// rather than a plain pointer.
+class ConnectionSlot {
+public:
+  void capture(const TransportPtr &conn) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!conn->connected() || conn_) {
+      return;
+    }
+    conn_ = conn;
+    cond_.notify_all();
+  }
+
+  TransportPtr wait(std::chrono::milliseconds timeout) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    cond_.wait_for(lock, timeout, [&] { return conn_ != nullptr; });
+    return conn_;
+  }
+
+  // Drops the references held here. forceClose() is only observable as a FIN
+  // once the last shared_ptr goes away, so a test asserting EOF must release
+  // both its copy and this one.
+  void release() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    conn_.reset();
+  }
+
+private:
+  mutable std::mutex mutex_;
+  std::condition_variable cond_;
+  TransportPtr conn_;
+};
+
+// Runs fn on the connection's loop and waits for it, for the methods whose
+// thread contract requires the loop thread (everything except send/forceClose).
+template <typename Fn>
+bool runOnConnectionLoop(const TransportPtr &conn, Fn fn) {
+  auto done = std::make_shared<std::promise<void>>();
+  std::future<void> finished = done->get_future();
+  conn->getLoop()->runInLoop(
+      [fn = std::move(fn), done]() mutable {
+        fn();
+        done->set_value();
+      });
+  return finished.wait_for(kDeadline) == std::future_status::ready;
 }
 
 class IntegrationTest : public ::testing::Test {
@@ -348,8 +454,8 @@ protected:
   // race -- start() arms the acceptor through runInLoop, so returning from it on
   // the base loop thread is the only point at which a client is guaranteed to
   // be able to connect rather than get ECONNREFUSED.
-  uint16_t startServer(int threadNum, TcpConnection::MessageCallback onMessage,
-                       TcpConnection::ConnectionCallback onConnection = nullptr) {
+  uint16_t startServer(int threadNum, Transport::MessageCallback onMessage,
+                       Transport::ConnectionCallback onConnection = nullptr) {
     auto done = std::make_shared<std::promise<void>>();
     std::future<void> ready = done->get_future();
 
@@ -361,7 +467,7 @@ protected:
       // Wrapped rather than replaced: teardown has to know how many connections
       // the server still holds, and only this callback can tell it.
       server_->setConnectionCallback(
-          [this, onConnection](const TcpConnectionPtr &conn) {
+          [this, onConnection](const TransportPtr &conn) {
             if (conn->connected()) {
               live_.opened();
             } else {
@@ -489,7 +595,7 @@ TEST_F(IntegrationTest, SplitWriteIsReassembled) {
   // never reply at all, and the client would time out rather than quietly
   // getting half its data back.
   const uint16_t port = startServer(
-      0, [assembled, messages, expectedSize](const TcpConnectionPtr &conn,
+      0, [assembled, messages, expectedSize](const TransportPtr &conn,
                                              Buffer *buf, Timestamp) {
         messages->bump();
         assembled->append(buf->retrieveAllAsString());
@@ -678,7 +784,7 @@ TEST_F(IntegrationTest, ClientCloseIsNoticedAndServerKeepsServing) {
   auto closed = std::make_shared<Counter>();
 
   const uint16_t port = startServer(
-      0, echoBack, [opened, closed](const TcpConnectionPtr &conn) {
+      0, echoBack, [opened, closed](const TransportPtr &conn) {
         if (conn->connected()) {
           opened->bump();
         } else {
@@ -718,6 +824,224 @@ TEST_F(IntegrationTest, ClientCloseIsNoticedAndServerKeepsServing) {
   std::string received;
   ASSERT_TRUE(second.recvExactly(payload.size(), &received, &error)) << error;
   EXPECT_EQ(received, payload) << "the server stopped serving after a disconnect";
+}
+
+// --- Transport contract -----------------------------------------------------
+//
+// These cases hold the interface itself, not TcpConnection's implementation:
+// every server-side call below goes through TransportPtr. A change that keeps
+// TCP working but breaks the abstraction (an accessor that stops being virtual,
+// a callback signature that drifts back to TcpConnectionPtr) should fail here
+// before it reaches an HTTP or RPC session layer.
+
+TEST_F(IntegrationTest, TransportSendReachesPeer) {
+  auto slot = std::make_shared<ConnectionSlot>();
+  const uint16_t port = startServer(
+      0, echoBack, [slot](const TransportPtr &conn) { slot->capture(conn); });
+  ASSERT_NE(port, 0);
+
+  ClientSocket client;
+  std::string error;
+  ASSERT_TRUE(client.connectTo(port, &error)) << error;
+
+  TransportPtr conn = slot->wait(kDeadline);
+  ASSERT_TRUE(conn) << "the server never exposed a TransportPtr";
+
+  const std::string payload = "sent through Transport::send";
+  conn->send(payload);
+
+  std::string received;
+  ASSERT_TRUE(client.recvExactly(payload.size(), &received, &error)) << error;
+  EXPECT_EQ(received, payload);
+}
+
+TEST_F(IntegrationTest, TransportMessageCallbackDeliversBuffer) {
+  auto received = std::make_shared<std::promise<std::string>>();
+  auto settled = std::make_shared<std::atomic<bool>>(false);
+  auto connectedWhenCalled = std::make_shared<std::atomic<bool>>(false);
+  std::future<std::string> message = received->get_future();
+
+  const uint16_t port = startServer(
+      0, [received, settled, connectedWhenCalled](const TransportPtr &conn,
+                                                  Buffer *buf, Timestamp) {
+        connectedWhenCalled->store(conn->connected());
+        if (settled->exchange(true)) {
+          return;
+        }
+        received->set_value(buf->retrieveAllAsString());
+      });
+  ASSERT_NE(port, 0);
+
+  ClientSocket client;
+  std::string error;
+  ASSERT_TRUE(client.connectTo(port, &error)) << error;
+  const std::string payload = "callback bytes";
+  ASSERT_TRUE(client.sendAll(payload, &error)) << error;
+
+  ASSERT_EQ(message.wait_for(kDeadline), std::future_status::ready)
+      << "the message callback never fired through the interface";
+  EXPECT_EQ(message.get(), payload);
+  EXPECT_TRUE(connectedWhenCalled->load());
+}
+
+// The write-complete path only exists after a short write: the socket's send
+// buffer has to fill first. 8MB is twice the default kernel ceiling used by
+// LargeBacklogIsResumedAcrossEventLoopTurns, so the server's output buffer is
+// still non-empty when the callback would otherwise be premature.
+TEST_F(IntegrationTest, TransportWriteCompleteCallbackFiresAfterShortWrite) {
+  auto slot = std::make_shared<ConnectionSlot>();
+  auto completed = std::make_shared<Counter>();
+
+  const uint16_t port = startServer(
+      0, echoBack, [slot](const TransportPtr &conn) { slot->capture(conn); });
+  ASSERT_NE(port, 0);
+
+  ClientSocket client;
+  std::string error;
+  ASSERT_TRUE(client.connectTo(port, &error)) << error;
+
+  TransportPtr conn = slot->wait(kDeadline);
+  ASSERT_TRUE(conn);
+  ASSERT_TRUE(runOnConnectionLoop(conn, [conn, completed] {
+    conn->setWriteCompleteCallback(
+        [completed](const TransportPtr &) { completed->bump(); });
+  })) << "setting the callback never ran on the connection loop";
+
+  const std::string payload = makePayload(8u * 1024 * 1024, 0xc0deu);
+  conn->send(payload);
+
+  std::string received;
+  ASSERT_TRUE(client.recvExactly(payload.size(), &received, &error)) << error;
+  expectSameBytes(payload, received);
+
+  ASSERT_TRUE(completed->waitForAtLeast(1, kDeadline))
+      << "writeCompleteCallback never fired after the output buffer drained";
+}
+
+// shutdown() is the orderly half-close: it must let pending bytes finish
+// before SHUT_WR. The payload is large enough that send() cannot complete
+// inline, so a shutdown that fired immediately would truncate it and the
+// client would see EOF with bytes missing.
+TEST_F(IntegrationTest, TransportShutdownIsOrderlyHalfClose) {
+  auto slot = std::make_shared<ConnectionSlot>();
+  const uint16_t port = startServer(
+      0, echoBack, [slot](const TransportPtr &conn) { slot->capture(conn); });
+  ASSERT_NE(port, 0);
+
+  ClientSocket client;
+  std::string error;
+  ASSERT_TRUE(client.connectTo(port, &error)) << error;
+
+  TransportPtr conn = slot->wait(kDeadline);
+  ASSERT_TRUE(conn);
+
+  const std::string payload = makePayload(8u * 1024 * 1024, 0x5d0u);
+  conn->send(payload);
+  ASSERT_TRUE(runOnConnectionLoop(conn, [conn] { conn->shutdown(); }))
+      << "shutdown never ran on the connection loop";
+
+  std::string received;
+  ASSERT_TRUE(client.recvExactly(payload.size(), &received, &error)) << error;
+  expectSameBytes(payload, received);
+
+  ASSERT_TRUE(client.expectEof(&error)) << error;
+}
+
+TEST_F(IntegrationTest, TransportForceCloseClosesImmediately) {
+  auto slot = std::make_shared<ConnectionSlot>();
+  const uint16_t port = startServer(
+      0, echoBack, [slot](const TransportPtr &conn) { slot->capture(conn); });
+  ASSERT_NE(port, 0);
+
+  ClientSocket client;
+  std::string error;
+  ASSERT_TRUE(client.connectTo(port, &error)) << error;
+
+  TransportPtr conn = slot->wait(kDeadline);
+  ASSERT_TRUE(conn);
+
+  conn->forceClose(); // thread-safe by contract
+  conn.reset();
+  slot->release(); // the server closes the socket when the last ref is gone
+  ASSERT_TRUE(client.expectEof(&error)) << error;
+}
+
+TEST_F(IntegrationTest, TransportAccessorsExposeConnectionState) {
+  auto slot = std::make_shared<ConnectionSlot>();
+  const uint16_t port = startServer(
+      0, echoBack, [slot](const TransportPtr &conn) { slot->capture(conn); });
+  ASSERT_NE(port, 0);
+
+  ClientSocket client;
+  std::string error;
+  ASSERT_TRUE(client.connectTo(port, &error)) << error;
+
+  TransportPtr conn = slot->wait(kDeadline);
+  ASSERT_TRUE(conn);
+
+  EXPECT_TRUE(conn->connected());
+  EXPECT_NE(conn->getLoop(), nullptr);
+  EXPECT_FALSE(conn->name().empty());
+  EXPECT_NE(conn->name().find(conn->peerAddress().toIpPort()),
+            std::string::npos)
+      << "connection name should identify the peer: " << conn->name();
+  EXPECT_EQ(conn->localAddress().toPort(), port);
+  EXPECT_FALSE(conn->peerAddress().toIpPort().empty());
+}
+
+TEST_F(IntegrationTest, TransportStreamIdIsDefault) {
+  auto slot = std::make_shared<ConnectionSlot>();
+  const uint16_t port = startServer(
+      0, echoBack, [slot](const TransportPtr &conn) { slot->capture(conn); });
+  ASSERT_NE(port, 0);
+
+  ClientSocket client;
+  std::string error;
+  ASSERT_TRUE(client.connectTo(port, &error)) << error;
+
+  TransportPtr conn = slot->wait(kDeadline);
+  ASSERT_TRUE(conn);
+  EXPECT_EQ(conn->streamId(), Transport::kDefaultStreamId);
+}
+
+// send() must be usable from any thread; the actual write has to happen on the
+// connection's loop. The write-complete callback records isInLoopThread(), so a
+// send that ran inline on the caller's thread would fail the assertion even
+// though the bytes arrived.
+TEST_F(IntegrationTest, TransportSendFromNonLoopThreadReachesPeer) {
+  auto slot = std::make_shared<ConnectionSlot>();
+  auto completed = std::make_shared<Counter>();
+  auto ranOnLoopThread = std::make_shared<std::atomic<bool>>(false);
+
+  const uint16_t port = startServer(
+      0, echoBack, [slot](const TransportPtr &conn) { slot->capture(conn); });
+  ASSERT_NE(port, 0);
+
+  ClientSocket client;
+  std::string error;
+  ASSERT_TRUE(client.connectTo(port, &error)) << error;
+
+  TransportPtr conn = slot->wait(kDeadline);
+  ASSERT_TRUE(conn);
+  ASSERT_TRUE(runOnConnectionLoop(conn, [conn, completed, ranOnLoopThread] {
+    conn->setWriteCompleteCallback(
+        [completed, ranOnLoopThread](const TransportPtr &c) {
+          ranOnLoopThread->store(c->getLoop()->isInLoopThread());
+          completed->bump();
+        });
+  }));
+
+  const std::string payload = "written from the test thread";
+  std::thread sender([conn, payload] { conn->send(payload); });
+  sender.join();
+
+  std::string received;
+  ASSERT_TRUE(client.recvExactly(payload.size(), &received, &error)) << error;
+  EXPECT_EQ(received, payload);
+
+  ASSERT_TRUE(completed->waitForAtLeast(1, kDeadline));
+  EXPECT_TRUE(ranOnLoopThread->load())
+      << "send() must move the write onto the connection's loop thread";
 }
 
 } // namespace

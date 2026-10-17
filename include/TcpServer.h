@@ -89,14 +89,15 @@ private:
   // using TcpConnectionPtr = std::shared_ptr<TcpConnection>;
 
   using TcpConnectionPtr = TcpConnection::TcpConnectionPtr;
-  using ConnectionMap = std::map<std::string, TcpConnectionPtr>;
+  using TransportPtr = Transport::TransportPtr;
+  using ConnectionMap = std::map<std::string, TransportPtr>;
   // 收到新TCP连接， 创建TcpConnection对象， 分配IO线程， 加入全局连接表，
   // 正式启用连接
   void newConnection(Socket connSocket, const InetAddress &peerAddr);
   // 子线程收到关闭事件， 跨线程投递清理任务到主线程
-  void removeConnection(const TcpConnectionPtr &conn);
+  void removeConnection(const TransportPtr &conn);
   // 主线程使用，从map删除连接， 收尾销毁资源
-  void removeConnectionInLoop(const TcpConnectionPtr &conn);
+  void removeConnectionInLoop(const TransportPtr &conn);
 
   EventLoop *const baseLoop_;          // 主线程主Reactor，永不修改
   const std::string name_;             // 服务名称

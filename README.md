@@ -22,12 +22,37 @@ TcpServer(baseLoop主线程)
           ├── worker‑0 EventLoop + EPollPoller + TcpConnection
           ├── worker‑1 EventLoop + EPollPoller + TcpConnection
           └── worker‑2 EventLoop + EPollPoller + TcpConnection
+```
 
 - **baseLoop（main 线程）**：只做`accept`，不处理业务 IO。
 - **worker EventLoop**：每个线程一个 epoll 实例，负责已连接 socket 的读写事件。
 **连接一旦分派到某个 worker，该连接所有 IO 事件永远在这个 worker 线程执行**，业务回调都跑在 IO 线程，不用加锁。
 
+### Transport layer
 
+Application code (HTTP server, RPC session) consumes a connection as a
+`TransportPtr`, a transport-agnostic byte stream:
+
+```
+Application (HTTP / RPC session)
+        │  TransportPtr — one reliable, ordered, bidirectional byte stream
+        ▼
+Transport (pure virtual interface, include/Transport.h)
+        ▲
+        │ implemented by
+TcpConnection ── Socket / Channel ── EPollPoller
+        ▲
+        │ created by
+TcpServer / Acceptor (baseLoop)
+```
+
+A TCP connection carries exactly one stream (`streamId()` is
+`kDefaultStreamId`); a QUIC connection would carry one `Transport` per stream.
+**TCP is implemented today; QUIC is a future target and is not implemented.**
+See [RFC-0003](docs/rfc/0003-transport-abstraction.md) for the interface,
+ownership model and thread contract.
+
+```
 ┌───────────────────────────────────────────┐
 │  TcpServer (baseLoop)                     │
 │  ┌─────────┐                              │
@@ -40,6 +65,7 @@ TcpServer(baseLoop主线程)
 │  (worker 0)  (worker 1)  (worker 2)       │
 │     │            │            │            │
 │  TcpConn     TcpConn     TcpConn          │
+│  (Transport) (Transport) (Transport)      │
 └───────────────────────────────────────────┘
 ```
 
@@ -51,7 +77,8 @@ TcpServer(baseLoop主线程)
 | `EPollPoller` | Epoll-based I/O multiplexing (implements `Poller`) |
 | `Channel` | Event dispatcher: binds fd + callbacks, does not own the fd |
 | `TimerQueue` | Min-heap timer management using `timerfd` |
-| `TcpConnection` | TCP connection with input/output buffers, `shared_ptr` lifecycle |
+| `Transport` | Transport-agnostic byte-stream interface. TCP is implemented via `TcpConnection`; QUIC is a future target, **not implemented** ([RFC-0003](docs/rfc/0003-transport-abstraction.md)) |
+| `TcpConnection` | TCP connection with input/output buffers, `shared_ptr` lifecycle; implements `Transport` |
 | `TcpServer` | Multi-reactor server with accept loop and connection management |
 | `TcpClient` | Client entry point: `Connector` handshake + `TcpConnection` lifecycle |
 | `Acceptor` | Listening socket handler, runs in base reactor |
@@ -182,6 +209,7 @@ ReactorNet/
 │   ├── Timer.h
 │   ├── TimerQueue.h
 │   ├── Buffer.h
+│   ├── Transport.h
 │   ├── TcpConnection.h
 │   ├── Acceptor.h
 │   ├── TcpServer.h
