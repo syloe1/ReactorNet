@@ -18,18 +18,35 @@ using namespace reactornet::rpc;
 // These cases never touch a socket: they feed bytes into a Buffer exactly as a
 // read handler would, which is the point of keeping FrameReader independent of
 // TcpConnection.
+// ASan installs its own operator new/delete interceptors; replacing them in
+// the test binary makes its alloc/dealloc bookkeeping see mismatched pairs in
+// unrelated library code and abort. The allocation counter is therefore
+// compiled in only for non-ASan builds. The behavioural half of the oversized
+// case (kProtocolError with only the header present) runs under every build.
+#if defined(__SANITIZE_ADDRESS__)
+#define REACTORNET_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define REACTORNET_ASAN 1
+#endif
+#endif
+#ifndef REACTORNET_ASAN
+#define REACTORNET_ASAN 0
+#endif
+
 namespace {
 
+#if !REACTORNET_ASAN
 // Count allocations above 1 MiB for the "oversized length must not allocate"
-// case. Replacing global operator new in this test binary is safe: the counter
-// is only inspected around a single parse() call, and no other test depends on
-// allocator state.
+// case. The counter is only inspected around a single parse() call, and no
+// other test depends on allocator state.
 std::atomic<size_t> &largeAllocations() {
   static std::atomic<size_t> count{0};
   return count;
 }
 
 constexpr size_t kLargeAllocationBytes = 1024u * 1024u;
+#endif
 
 std::string makeFrame(MessageType type, uint32_t requestId,
                       const std::string &body) {
@@ -63,6 +80,7 @@ std::string makeBareHeader(uint32_t requestId, uint32_t declaredBodyLen) {
 
 } // namespace
 
+#if !REACTORNET_ASAN
 void *operator new(std::size_t size) {
   if (size > kLargeAllocationBytes) {
     largeAllocations().fetch_add(1, std::memory_order_relaxed);
@@ -79,6 +97,7 @@ void operator delete(void *p) noexcept { std::free(p); }
 void operator delete[](void *p) noexcept { std::free(p); }
 void operator delete(void *p, std::size_t) noexcept { std::free(p); }
 void operator delete[](void *p, std::size_t) noexcept { std::free(p); }
+#endif // !REACTORNET_ASAN
 
 TEST(FrameReaderTest, ByteAtATimeYieldsExactlyOneFrame) {
   FrameReader reader;
@@ -193,10 +212,14 @@ TEST(FrameReaderTest, OversizedDeclaredBodyFailsFastWithoutAllocating) {
   out.requestId = 0xA5A5A5A5u;
   std::string body = "untouched";
 
+#if !REACTORNET_ASAN
   const size_t allocationsBefore = largeAllocations().load();
+#endif
   EXPECT_EQ(reader.parse(&buf, &out, &body), ParseResult::kProtocolError);
+#if !REACTORNET_ASAN
   EXPECT_EQ(largeAllocations().load(), allocationsBefore)
       << "the declared bodyLen must be rejected before any big allocation";
+#endif
 
   EXPECT_EQ(out.requestId, 0xA5A5A5A5u);
   EXPECT_EQ(body, "untouched");
