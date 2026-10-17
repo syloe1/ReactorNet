@@ -9,7 +9,7 @@
 #include <iostream>
 #include <sstream>
 using namespace reactornet;
-using TcpConnectionPtr = TcpConnection::TcpConnectionPtr;
+using TransportPtr = Transport::TransportPtr;
 
 // --- HTTP Server ---
 // Usage: ./http_server [port] [docRoot] [numThreads]
@@ -19,19 +19,19 @@ public:
   HttpServer(EventLoop *loop, const InetAddress &listenAddr,
              const std::string &docRoot)
       : server_(loop, listenAddr, "HttpServer"), docRoot_(docRoot) {
-    server_.setConnectionCallback([](const TcpConnectionPtr &conn) {
+    server_.setConnectionCallback([](const TransportPtr &conn) {
       std::cout << "[HTTP] " << conn->peerAddress().toIpPort() << " -> "
                 << conn->localAddress().toIpPort() << " is "
                 << (conn->connected() ? "UP" : "DOWN") << std::endl;
     });
-    server_.setMessageCallback([this](const TcpConnectionPtr &conn, Buffer *buf,
+    server_.setMessageCallback([this](const TransportPtr &conn, Buffer *buf,
                                       Timestamp) { onMessage(conn, buf); });
   }
   void setThreadNum(int numThreads) { server_.setThreadNum(numThreads); }
   void start() { server_.start(); }
 
 private:
-  void onMessage(const TcpConnectionPtr &conn, Buffer *buf) {
+  void onMessage(const TransportPtr &conn, Buffer *buf) {
     // HTTP/1.1 keep-alive: handle every complete request already buffered.
     while (true) {
       const char *dataStart = buf->peek();

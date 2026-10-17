@@ -56,7 +56,7 @@ void TcpConnection::connectDestroyed() {
 void TcpConnection::handleRead(Timestamp receiveTime) {
   loop_->assertInLoopThread();
   int savedErrno = 0;
-  ssize_t n = inputBuffer_.readFd(channel_->fd(), &savedErrno);
+  ssize_t n = inputBuffer_.readFrom(socket_, &savedErrno);
   if (n > 0) {
     if (messageCallback_) {
       messageCallback_(shared_from_this(), &inputBuffer_, receiveTime);
@@ -79,7 +79,7 @@ void TcpConnection::handleWrite() {
   loop_->assertInLoopThread();
   if (channel_->isWriting()) {
     int savedErrno = 0;
-    ssize_t n = outputBuffer_.writeFd(channel_->fd(), &savedErrno);
+    ssize_t n = outputBuffer_.writeTo(socket_, &savedErrno);
     if (n > 0) {
       if (outputBuffer_.readableBytes() == 0) {
         // All data written
@@ -116,7 +116,7 @@ void TcpConnection::handleClose() {
 void TcpConnection::handleError() {
   int err = 0;
   socklen_t len = sizeof(err);
-  if (::getsockopt(channel_->fd(), SOL_SOCKET, SO_ERROR, &err, &len) < 0) {
+  if (::getsockopt(socket_.fd(), SOL_SOCKET, SO_ERROR, &err, &len) < 0) {
     std::cerr << "[TcpConnection] handleError getsockopt failed: "
               << strerror(errno) << std::endl;
   }

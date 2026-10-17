@@ -4,7 +4,7 @@
 #include "TcpServer.h"
 #include <iostream>
 using namespace reactornet;
-using TcpConnectionPtr = TcpConnection::TcpConnectionPtr;
+using TransportPtr = Transport::TransportPtr;
 
 // --- Echo Server ---
 // Usage: ./echo_server [numThreads]
@@ -13,13 +13,13 @@ class EchoServer {
 public:
   EchoServer(EventLoop *loop, const InetAddress &listenAddr)
       : server_(loop, listenAddr, "EchoServer") {
-    server_.setConnectionCallback([](const TcpConnectionPtr &conn) {
+    server_.setConnectionCallback([](const TransportPtr &conn) {
       std::cout << "[Echo] " << conn->peerAddress().toIpPort() << " -> "
                 << conn->localAddress().toIpPort() << " is "
                 << (conn->connected() ? "UP" : "DOWN") << std::endl;
     });
     server_.setMessageCallback(
-        [](const TcpConnectionPtr &conn, Buffer *buf, Timestamp) {
+        [](const TransportPtr &conn, Buffer *buf, Timestamp) {
           // Echo back whatever we received
           std::string msg = buf->retrieveAllAsString();
           conn->send(msg);
