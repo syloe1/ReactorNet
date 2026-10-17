@@ -220,9 +220,19 @@ protected:
       // waits on. The fixture outlives the thread (TearDown joins first), so
       // touching the member here is safe.
       loopReturned_.set_value();
+      // Park before the stack frame — and with it the EventLoop — goes away.
+      // Without this a test that already stopped the loop (QuitMakesLoopReturn)
+      // can reach TearDown, call quit() through loop_, and land in the
+      // destructor's wake: ASan reports a wild-pointer store inside quit().
+      teardownAckFuture_.wait();
     });
 
     loop_ = ready.get();
+    // get_future() may only be called once, and the loop thread may satisfy the
+    // promise at any moment after it is published, so fetch both here rather
+    // than from a test body.
+    loopReturnedFuture_ = loopReturned_.get_future();
+    teardownAckFuture_ = teardownAck_.get_future();
 
     // Handshake: functors only run from inside loop()'s body, so observing one
     // proves loop() has been entered. That matters twice over.
@@ -249,8 +259,19 @@ protected:
   void TearDown() override {
     // Guarded: if SetUp() failed before publishing the loop, there is nothing to
     // quit — but the thread may still be there to join.
-    if (loop_ != nullptr) {
+    if (loop_ != nullptr &&
+        loopReturnedFuture_.wait_for(0s) != std::future_status::ready) {
+      // loop() has not returned, so the EventLoop is still alive and this is
+      // the ordinary cross-thread stop. If it *has* returned, the loop thread
+      // is parked on teardownAck_ before destroying the object, and calling
+      // quit() here would race that destructor.
       loop_->quit(); // thread-safe: sets the flag, then wakes the loop
+    }
+    // Release the loop thread after any quit(). It keeps the EventLoop alive
+    // until this ack, which is what makes the check above safe: the object
+    // cannot be destroyed while the future is not ready.
+    if (teardownAckFuture_.valid()) {
+      teardownAck_.set_value();
     }
     if (thread_.joinable()) {
       thread_.join();
@@ -261,9 +282,14 @@ protected:
 
   EventLoop *loop_ = nullptr;
   std::thread thread_;
-  // Set by the loop thread after loop() returns. get_future() is called by the
-  // one case that waits on it.
+  // Set by the loop thread after loop() returns. Its future is fetched in
+  // SetUp(), before any test can wait on it.
   std::promise<void> loopReturned_;
+  std::future<void> loopReturnedFuture_;
+  // Held by the loop thread after loop() returns and released by TearDown. It
+  // pins the EventLoop's lifetime across the join.
+  std::promise<void> teardownAck_;
+  std::future<void> teardownAckFuture_;
 };
 
 TEST_F(EventLoopLoopTest, RunInLoopFromAnotherThreadExecutesOnTheLoopThread) {
@@ -317,11 +343,18 @@ TEST_F(EventLoopLoopTest, QueueInLoopDefersEvenOnTheLoopThread) {
 TEST_F(EventLoopLoopTest, CrossThreadPostIsWokenNotLeftToThePollTimeout) {
   auto probe = std::make_shared<Probe>();
 
-  // SetUp's handshake left the loop back in poll with nothing armed, so this
-  // sleep is not synchronization: the post lands on a parked loop either way,
-  // and both interleavings pass. It just keeps the reported latency an honest
-  // park → wake measurement.
-  std::this_thread::sleep_for(20ms);
+  // A short timer instead of sleep_for: waiting for it to fire means the loop
+  // has been through a full poll cycle since SetUp's handshake. Like the sleep
+  // it replaces this is not synchronization — the post lands on a parked loop
+  // either way, and both interleavings pass — but the wait is observed on the
+  // loop rather than guessed on the test thread, and the new timer facade gets
+  // exercised by an existing test instead of only by its own cases.
+  auto settle = std::make_shared<Probe>();
+  loop_->runAfter(0.02,
+                  [settle, this] { settle->run(loop_->isInLoopThread()); });
+  ASSERT_TRUE(settle->waitFor(1, kWaitTimeout))
+      << "the loop must have completed a poll cycle before the latency is "
+         "measured";
 
   const auto postedAt = std::chrono::steady_clock::now();
   loop_->runInLoop([probe, this] { probe->run(loop_->isInLoopThread()); });
@@ -346,17 +379,158 @@ TEST_F(EventLoopLoopTest, CrossThreadPostIsWokenNotLeftToThePollTimeout) {
   EXPECT_LT(latency, kWakeupBudget);
 }
 
-TEST_F(EventLoopLoopTest, QuitMakesLoopReturn) {
-  // Must be fetched before the loop thread can set it — which it may already
-  // have done for all we know, and that is fine: a promise can be satisfied
-  // before get_future() is ever called, it just cannot be retrieved twice.
-  std::future<void> returned = loopReturned_.get_future();
+// --- Timers through EventLoop's public facade -------------------------------
+//
+// TimerQueue has its own suite; these cases cover the delegation itself and the
+// properties that only exist at this layer: callbacks run on the loop thread, a
+// timer armed from another thread wakes a parked loop, and cancellation is
+// visible through the facade.
 
+TEST_F(EventLoopLoopTest, RunAfterFiresExactlyOnceOnTheLoopThread) {
+  auto probe = std::make_shared<Probe>();
+  const auto armedAt = std::chrono::steady_clock::now();
+
+  loop_->runAfter(0.05,
+                  [probe, this] { probe->run(loop_->isInLoopThread()); });
+
+  ASSERT_TRUE(probe->waitFor(1, kWaitTimeout))
+      << "runAfter must fire without any eventfd post or I/O";
+  EXPECT_TRUE(probe->ranInLoopThread())
+      << "timer callbacks must run on the loop thread";
+
+  // A later sentinel instead of a sleep: when it fires, twice the one-shot's
+  // delay has elapsed, so "exactly once" is observed rather than assumed.
+  auto sentinel = std::make_shared<Probe>();
+  loop_->runAfter(0.10,
+                  [sentinel, this] { sentinel->run(loop_->isInLoopThread()); });
+  ASSERT_TRUE(sentinel->waitFor(1, kWaitTimeout));
+
+  EXPECT_EQ(probe->runs(), 1) << "runAfter must register a one-shot timer";
+
+  const auto delay = std::chrono::duration_cast<std::chrono::milliseconds>(
+      probe->firstRunAt() - armedAt);
+  RecordProperty("run_after_delay_ms", static_cast<int>(delay.count()));
+  EXPECT_GE(delay.count(), 45) << "a 50ms timer must not fire early";
+  EXPECT_LT(delay.count(), 1000)
+      << "a 50ms timer must fire on its deadline, not on the loop's 10s poll "
+         "timeout";
+}
+
+TEST_F(EventLoopLoopTest, RunAtFiresAtTheAbsoluteDeadline) {
+  auto probe = std::make_shared<Probe>();
+  auto firedAt = std::make_shared<std::atomic<int64_t>>(0);
+
+  Timestamp when = Timestamp::now();
+  when += 0.04;
+  loop_->runAt(when, [probe, firedAt, this] {
+    firedAt->store(Timestamp::now().microSecondsSinceEpoch());
+    probe->run(loop_->isInLoopThread());
+  });
+
+  ASSERT_TRUE(probe->waitFor(1, kWaitTimeout));
+  EXPECT_TRUE(probe->ranInLoopThread());
+  // The distinguishing property of runAt over runAfter: the argument is a
+  // deadline, not a delay. getExpired() only pops timers with
+  // expiration <= now, so this must never hold before the deadline.
+  EXPECT_GE(firedAt->load(), when.microSecondsSinceEpoch())
+      << "runAt must not fire before its absolute deadline";
+}
+
+TEST_F(EventLoopLoopTest, RunEveryFiresUntilCancelled) {
+  auto probe = std::make_shared<Probe>();
+
+  TimerId id = loop_->runEvery(
+      0.02, [probe, this] { probe->run(loop_->isInLoopThread()); });
+
+  ASSERT_TRUE(probe->waitFor(3, kWaitTimeout))
+      << "a repeating timer must fire again after each interval";
+  EXPECT_TRUE(probe->ranInLoopThread());
+
+  loop_->cancelTimer(id);
+
+  // Barrier posted after the cancel. pendingFunctors_ is FIFO and both calls
+  // are queued from this thread, so once the barrier runs the cancel has been
+  // applied and the count can no longer grow. This also makes the case robust
+  // against a loop thread that was descheduled long enough for another tick to
+  // land between waitFor() returning and the cancel being processed.
+  auto barrier = std::make_shared<std::promise<void>>();
+  std::future<void> barrierDone = barrier->get_future();
+  loop_->runInLoop([barrier] { barrier->set_value(); });
+  ASSERT_EQ(barrierDone.wait_for(kWaitTimeout), std::future_status::ready)
+      << "the loop must process cancelTimer";
+  const int runsAtCancel = probe->runs();
+  EXPECT_GE(runsAtCancel, 3);
+
+  auto sentinel = std::make_shared<Probe>();
+  loop_->runAfter(0.10,
+                  [sentinel, this] { sentinel->run(loop_->isInLoopThread()); });
+  ASSERT_TRUE(sentinel->waitFor(1, kWaitTimeout));
+
+  EXPECT_EQ(probe->runs(), runsAtCancel)
+      << "a cancelled repeating timer must not fire again";
+}
+
+TEST_F(EventLoopLoopTest, RunEveryCanBeCancelledFromItsOwnCallback) {
+  auto probe = std::make_shared<Probe>();
+  auto runs = std::make_shared<std::atomic<int>>(0);
+  // Only the pointer is atomic: TimerId is 16 bytes and would need libatomic.
+  // The Timer is alive while its callback runs, so sequence() is safe to read
+  // here; the null check is only a guard for a lost publish race.
+  auto self = std::make_shared<std::atomic<Timer *>>(nullptr);
+
+  TimerId id = loop_->runEvery(0.02, [probe, runs, self, this] {
+    probe->run(loop_->isInLoopThread());
+    if (runs->fetch_add(1) + 1 == 3) {
+      if (Timer *p = self->load()) {
+        loop_->cancelTimer(TimerId(p, p->sequence()));
+      }
+    }
+  });
+  self->store(id.timer());
+
+  // Sentinel 120ms out: without the expired-batch bookkeeping the timer is
+  // restarted after this callback and fires ~6 more times before it lands.
+  auto sentinel = std::make_shared<Probe>();
+  loop_->runAfter(0.12,
+                  [sentinel, this] { sentinel->run(loop_->isInLoopThread()); });
+  ASSERT_TRUE(sentinel->waitFor(1, kWaitTimeout))
+      << "the loop must survive a cancel from the timer's own callback";
+
+  EXPECT_EQ(runs->load(), 3)
+      << "cancelTimer inside the callback must stop a repeating timer";
+  EXPECT_EQ(probe->runs(), 3);
+}
+
+TEST_F(EventLoopLoopTest, TimerArmedFromAnotherThreadWakesTheLoop) {
+  auto probe = std::make_shared<Probe>();
+  const auto armedAt = std::chrono::steady_clock::now();
+
+  // Called from the test thread while the loop is parked in poll with nothing
+  // else armed. The insertion is queued and must wake the loop; without the
+  // wakeup it waits for the 10s poll timeout and this 1s budget fails.
+  loop_->runAfter(0.02,
+                  [probe, this] { probe->run(loop_->isInLoopThread()); });
+
+  const bool fired = probe->waitFor(1, kWakeupBudget);
+  const auto waited = std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now() - armedAt);
+  ASSERT_TRUE(fired) << "a timer armed cross-thread must wake the loop; still "
+                        "nothing after "
+                     << waited.count()
+                     << "us, while the poll timeout sits at 10s";
+  EXPECT_TRUE(probe->ranInLoopThread());
+}
+
+TEST_F(EventLoopLoopTest, QuitMakesLoopReturn) {
   // No handshake needed here: SetUp's already proved loop() is running, so this
   // quit() cannot be the one that loop()'s opening `quit_ = false` discards.
   loop_->quit();
 
-  EXPECT_EQ(returned.wait_for(kWaitTimeout), std::future_status::ready)
+  // The future was fetched in SetUp(). Once it is ready the loop thread has
+  // returned from loop() and is parked on teardownAck_; TearDown sees that and
+  // does not touch loop_ again.
+  EXPECT_EQ(loopReturnedFuture_.wait_for(kWaitTimeout),
+            std::future_status::ready)
       << "quit() must break loop() out of poll and let it return";
   // The join is TearDown's: doing it here too would join a thread twice.
 }
