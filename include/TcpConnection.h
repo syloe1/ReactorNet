@@ -6,6 +6,7 @@
 #include "Socket.h"
 #include "Timer.h"
 #include "noncopyable.h"
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <string>
@@ -47,7 +48,7 @@ public:
 
   // Construct with an already-accepted socket fd and peer address.
   // 循环 连接名字 fd, 本地地址 客户端地址
-  TcpConnection(EventLoop *loop, const std::string &name, int sockfd,
+  TcpConnection(EventLoop *loop, const std::string &name, Socket socket,
                 const InetAddress &localAddr, const InetAddress &peerAddr);
   ~TcpConnection();
 
@@ -104,7 +105,11 @@ private:
 
   EventLoop *loop_;        // 连接归属的IO线程循环
   const std::string name_; // 连接名称
-  StateE state_;           // 当前连接状态
+  // send()/shutdown()/forceClose()/connected() read this from any thread while
+  // the loop thread writes it (handleClose, connectEstablished, ...), so it is
+  // atomic. The state machine's transitions still all happen on the loop
+  // thread; only the reads are cross-thread.
+  std::atomic<StateE> state_; // 当前连接状态
 
   Socket socket_;                    // TCP套接字封装（持有fd）
   std::unique_ptr<Channel> channel_; // fd对应的epoll事件处理器
