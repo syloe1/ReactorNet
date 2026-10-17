@@ -34,3 +34,7 @@ include(GoogleTest)
 # hang is reported as a ctest failure rather than holding the CI job open until
 # the runner's own limit. Applies to the unit suites too, which are far quicker.
 gtest_discover_tests(reactornet_tests PROPERTIES TIMEOUT 60)
+
+# RPC has its own test binary and library target. It is added after the
+# core's test target so GTest::gtest_main already exists.
+add_subdirectory(rpc)
