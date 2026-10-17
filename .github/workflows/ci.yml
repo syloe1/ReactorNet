@@ -13,6 +13,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check core/rpc dependency direction
+        run: |
+          # The RPC layer may include core headers; core sources must never
+          # include rpc/ headers (docs/rfc/0002-rpc-layering.md).
+          if git grep -nE '#[[:space:]]*include[[:space:]]*[<"](reactornet/)?rpc/' -- include src; then
+            echo "::error::core sources must not include rpc/ headers"
+            exit 1
+          fi
+
       - name: Configure
         run: cmake -B build -DBUILD_TESTING=ON
 

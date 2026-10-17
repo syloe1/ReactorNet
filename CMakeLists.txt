@@ -40,6 +40,10 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(reactornet PUBLIC -Wall -Wextra -Wpedantic)
 endif()
 
+# The RPC layer is built on top of the core. The dependency is one-way: core
+# sources must never include rpc/ headers (enforced by the CI boundary grep).
+add_subdirectory(rpc)
+
 # Echo Server example
 add_executable(echo_server example/echo_server.cpp)
 target_link_libraries(echo_server PRIVATE reactornet)
