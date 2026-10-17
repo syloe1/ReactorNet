@@ -2,6 +2,7 @@
 # and GoogleTest, which stays a dev-only dependency.
 add_executable(reactornet_rpc_tests
     protocol_test.cpp
+    frame_reader_test.cpp
 )
 
 target_link_libraries(reactornet_rpc_tests PRIVATE

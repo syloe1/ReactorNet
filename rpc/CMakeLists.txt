@@ -11,6 +11,7 @@ endif()
 
 add_library(reactornet_rpc STATIC
     src/protocol.cpp
+    src/frame_reader.cpp
 )
 
 # PUBLIC so a consumer of the RPC library gets both the rpc/ and core headers,
