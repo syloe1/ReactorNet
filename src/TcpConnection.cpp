@@ -1,6 +1,7 @@
 #include "TcpConnection.h"
 #include "EventLoop.h"
 #include <cassert>
+#include <cerrno>
 #include <cstring>
 #include <iostream>
 #include <unistd.h>
@@ -130,7 +131,13 @@ void TcpConnection::send(const std::string &message) {
     if (loop_->isInLoopThread()) {
       sendInLoop(message);
     } else {
-      loop_->queueInLoop([this, message]() { sendInLoop(message); });
+      // Capture the shared_ptr, not `this`: the connection can be destroyed
+      // between queueing this task and running it (the loop may close it in
+      // the meantime), and a raw capture turns that into a use-after-free.
+      // Holding a reference here keeps the object alive until sendInLoop
+      // returns, which is exactly the lifetime the task needs.
+      TcpConnectionPtr self = shared_from_this();
+      loop_->queueInLoop([self, message]() { self->sendInLoop(message); });
     }
   }
 }
@@ -146,11 +153,49 @@ void TcpConnection::sendInLoop(const std::string &message) {
     return;
   }
 
-  outputBuffer_.append(message);
+  size_t remaining = message.size();
+  ssize_t nwritten = 0;
+  bool faultError = false;
 
-  // If not already writing, enable write notification
-  if (!channel_->isWriting()) {
-    channel_->enableWriting();
+  // Fast path: only when nothing is queued and no write event is armed. The
+  // conditions are about ordering as much as about speed — with bytes already
+  // in outputBuffer_, writing this message directly would put it ahead of the
+  // older ones. Here the kernel gets it immediately and, in the common case,
+  // no EPOLLOUT round trip is needed at all.
+  if (!channel_->isWriting() && outputBuffer_.readableBytes() == 0) {
+    nwritten = socket_.write(message.data(), remaining);
+    if (nwritten >= 0) {
+      remaining -= static_cast<size_t>(nwritten);
+      if (remaining == 0 && writeCompleteCallback_) {
+        // Queued rather than called inline: send() may already be running
+        // inside a user callback, and invoking user code from here would make
+        // the callback re-enter library state mid-send.
+        loop_->queueInLoop(
+            std::bind(writeCompleteCallback_, shared_from_this()));
+      }
+    } else {
+      const int savedErrno = errno;
+      nwritten = 0;
+      // EAGAIN/EWOULDBLOCK is ordinary back-pressure, not an error.
+      if (savedErrno != EWOULDBLOCK && savedErrno != EAGAIN) {
+        std::cerr << "[TcpConnection] sendInLoop write failed: "
+                  << strerror(savedErrno) << std::endl;
+        if (savedErrno == EPIPE || savedErrno == ECONNRESET) {
+          // The peer is gone; queueing the bytes would only grow a buffer that
+          // can never be drained.
+          faultError = true;
+        }
+      }
+    }
+  }
+
+  if (!faultError && remaining > 0) {
+    // Partial write or EAGAIN: buffer what is left and let EPOLLOUT drive it.
+    // This is the only case that needs outputBuffer_.
+    outputBuffer_.append(message.data() + nwritten, remaining);
+    if (!channel_->isWriting()) {
+      channel_->enableWriting();
+    }
   }
 }
 
