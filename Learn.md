@@ -172,6 +172,8 @@ while (!quit_) {
 
 4. **线程安全检查**：`assertInLoopThread()` 通过 TLS 变量检查当前是否在正确的线程中。
 
+5. **定时器门面**：`runAt(when, cb)` / `runAfter(seconds, cb)` / `runEvery(seconds, cb)` 直接委托私有的 `timerQueue_`，返回 `TimerId`；`cancelTimer(id)` 取消。三者都可从任意线程调用——`TimerQueue::addTimer()` 内部经 `runInLoop()` 把堆插入投递到 loop 线程，语义与 `runInLoop()` 一致：loop 线程立即注册，其他线程入队并唤醒。回调永远在 loop 线程执行。`TimerId` 同时携带指针和全局序列号，过期或重复取消都是 no-op。
+
 **思考题**：
 - 为什么需要 eventfd？不能直接往 pendingFunctors 队列里加任务然后等自然唤醒吗？
 - `doPendingFunctors()` 使用了 swap 技巧——为什么不用直接遍历原 vector？
@@ -209,10 +211,13 @@ TimerQueue 的数据结构：
 **为什么用 timerfd 而不是自己轮询？**
 timerfd 是 Linux 内核提供的定时器接口——内核会在定时器到期时通过 epoll 通知你，不需要在每次 `loop()` 迭代中手动检查堆顶。这让你可以在 `epoll_wait` 中同时等待 I/O 事件和定时器事件。
 
-添加定时器示例：
+添加定时器示例（经 `EventLoop` 的门面，见 2.3）：
 ```cpp
-loop.runAfter(3.0, "timeout", []{ printf("3 秒到了！\n"); });                // 单次
-loop.runEvery(5.0, "heartbeat", []{ printf("每 5 秒发送心跳\n"); });         // 重复
+TimerId timeout = loop.runAfter(3.0, []{ printf("3 秒到了！\n"); });   // 单次
+loop.cancelTimer(timeout);                                            // 需要时取消
+
+TimerId heartbeat = loop.runEvery(5.0, []{ printf("每 5 秒发送心跳\n"); }); // 重复
+loop.cancelTimer(heartbeat);
 ```
 
 **思考题**：`TimerQueue` 内部用裸指针 `Timer*` 管理堆，这在你刚看完 EventLoop 用智能指针的代码后可能让你困惑。想一想：这里的裸指针安全吗？为什么？

@@ -140,6 +140,26 @@ void EventLoop::queueInLoop(Functor cb) {
   }
 }
 
+// Timer facade. TimerQueue::addTimer() posts the heap insertion through
+// runInLoop(), which is exactly the semantics promised here: inline on the loop
+// thread, queued plus wakeup from anywhere else. addTimer builds the Timer on
+// the calling thread, so only the insertion crosses the thread boundary.
+TimerId EventLoop::runAt(Timestamp when, Functor cb) {
+  return timerQueue_->addTimer(std::move(cb), when, 0.0);
+}
+
+TimerId EventLoop::runAfter(double delaySeconds, Functor cb) {
+  return timerQueue_->addTimer(std::move(cb), delaySeconds, 0.0);
+}
+
+// A repeating timer's first expiry is one interval out, matching runAfter()'s
+// delay semantics.
+TimerId EventLoop::runEvery(double intervalSeconds, Functor cb) {
+  return timerQueue_->addTimer(std::move(cb), intervalSeconds, intervalSeconds);
+}
+
+void EventLoop::cancelTimer(TimerId timerId) { timerQueue_->cancel(timerId); }
+
 void EventLoop::updateChannel(Channel *channel) {
   assert(channel->ownerLoop() == this);
   assertInLoopThread();

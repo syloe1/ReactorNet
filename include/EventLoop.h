@@ -55,6 +55,23 @@ public:
   // 无条件加入任务队列， 不会立即执行
   void queueInLoop(Functor cb);
 
+  // --- Timers ---
+  //
+  // Convenience facade over timerQueue_. All three register a callback that runs
+  // on the loop thread, and all three are safe to call from any thread: the
+  // TimerQueue routes insertion through runInLoop(), so on the loop thread the
+  // timer is inserted immediately, otherwise it is queued and the loop is woken.
+  //
+  // Every call returns a TimerId for cancelTimer(). A handle whose timer has
+  // already fired is a no-op, so a stale TimerId is harmless.
+  TimerId runAt(Timestamp when, Functor cb);            // absolute deadline
+  TimerId runAfter(double delaySeconds, Functor cb);    // one-shot, from now
+  TimerId runEvery(double intervalSeconds, Functor cb); // repeating
+
+  // Cancel a timer. Thread-safe, idempotent, and safe to call from inside the
+  // timer's own callback.
+  void cancelTimer(TimerId timerId);
+
   // --- Poller delegation ---
   // Poller套接字管理接口 转发给EpollPoller
   void updateChannel(Channel *channel);
