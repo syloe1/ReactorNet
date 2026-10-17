@@ -22,6 +22,7 @@ set(SOURCES
     src/Buffer.cpp
     src/TcpConnection.cpp
     src/Acceptor.cpp
+    src/Connector.cpp
     src/TcpServer.cpp
     src/EventLoopThread.cpp
     src/HttpRequest.cpp

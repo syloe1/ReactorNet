@@ -19,6 +19,7 @@ add_executable(reactornet_tests
     buffer_test.cpp
     event_loop_test.cpp
     timer_queue_test.cpp
+    connector_test.cpp
     integration_test.cpp
 )
 
