@@ -228,6 +228,36 @@ TEST_F(TimerQueueTest, RepeatingTimerFiresMoreThanOnce) {
   EXPECT_EQ(rec.ids(), (std::vector<long>{1, 1, 1}));
 }
 
+// Cancelling a repeating timer from inside its own callback. getExpired() has
+// already removed it from both timers_ and activeTimers_, so cancel() used to
+// fall through as a no-op and reset() restarted the timer forever. "Cancel
+// myself after N fires" is the canonical use of a repeating timer.
+TEST_F(TimerQueueTest, RepeatingTimerCancelledFromItsOwnCallbackStopsFiring) {
+  Recorder rec;
+  std::atomic<int> runs{0};
+  std::atomic<Timer *> self{nullptr};
+
+  // addTimer() defers insertion into the loop, and the first expiration is
+  // 20ms out, so the store below wins the race.
+  Timer *timer = addTimer(
+      [&] {
+        const int n = ++runs;
+        rec.record(1);
+        if (n == 3) {
+          queue_->cancel(self.load());
+        }
+      },
+      0.02, 0.02);
+  self.store(timer);
+
+  addTimer([&] { rec.record(99); }, 0.20); // sentinel: four intervals have passed
+
+  ASSERT_TRUE(rec.waitFor(4, kWaitTimeout));
+  EXPECT_EQ(runs.load(), 3) << "cancel() inside the callback must stop the "
+                              "repeating timer from being restarted";
+  EXPECT_EQ(rec.ids(), (std::vector<long>{1, 1, 1, 99}));
+}
+
 // The min-heap property, tested through the public API: three timers posted
 // furthest-first. A max-heap would pop them 100, 60, 20 — every timer still
 // fires, so only the order distinguishes the two.
