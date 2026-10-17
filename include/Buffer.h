@@ -20,8 +20,10 @@ class Socket;
 class Buffer {
   // TCP 缓冲区， 解决毡包，半包
 public:
-  static const size_t kCheapPrepend = 8;   // 前面预留8字节
-  static const size_t kInitialSize = 1024; // 初始可写空间1024字节
+  // constexpr static data members are implicitly inline in C++17, so odr-use
+  // (binding to a reference, e.g. EXPECT_EQ) needs no out-of-line definition.
+  static constexpr size_t kCheapPrepend = 8;   // 前面预留8字节
+  static constexpr size_t kInitialSize = 1024; // 初始可写空间1024字节
   explicit Buffer(size_t initialSize = kInitialSize);
   size_t readableBytes() const { return writeIndex_ - readIndex_; }
   size_t writableBytes() const { return buffer_.size() - writeIndex_; }
