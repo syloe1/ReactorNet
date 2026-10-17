@@ -17,6 +17,7 @@ FetchContent_MakeAvailable(googletest)
 add_executable(reactornet_tests
     smoke_test.cpp
     buffer_test.cpp
+    socket_test.cpp
     event_loop_test.cpp
     timer_queue_test.cpp
     integration_test.cpp
