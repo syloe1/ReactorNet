@@ -15,8 +15,10 @@ class EventLoop;
 class Acceptor : noncopyable {
 
 public:
+  // Passes ownership of the accepted socket: Socket is the single RAII owner
+  // from accept4() onward, so no exception path can leak the fd.
   using NewConnectionCallback =
-      std::function<void(int sockfd, const InetAddress &peerAddr)>;
+      std::function<void(Socket socket, const InetAddress &peerAddr)>;
   Acceptor(EventLoop *loop, const InetAddress &peerAddr);
   ~Acceptor();
   void setNewConnectionCallback(NewConnectionCallback cb) {

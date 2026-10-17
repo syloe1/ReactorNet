@@ -61,7 +61,7 @@ void Acceptor::handleRead() {
   // 成功拿到新连接
   if (connfd >= 0) {
     if (newConnectionCallback_) {
-      newConnectionCallback_(connfd, peerAddr);
+      newConnectionCallback_(Socket(connfd), peerAddr);
     } else {
       ::close(connfd);
     }

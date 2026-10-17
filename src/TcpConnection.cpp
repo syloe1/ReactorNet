@@ -8,11 +8,11 @@
 namespace reactornet {
 
 TcpConnection::TcpConnection(EventLoop *loop, const std::string &name,
-                             int sockfd, const InetAddress &localAddr,
+                             Socket socket, const InetAddress &localAddr,
                              const InetAddress &peerAddr)
     : loop_(loop), name_(name), state_(kConnecting),
-      socket_(sockfd),                     // TCP套接字封装（持有fd）
-      channel_(new Channel(loop, sockfd)), /// fd对应的epoll事件处理器
+      socket_(std::move(socket)),               // TCP套接字封装（持有fd）
+      channel_(new Channel(loop, socket_.fd())), /// fd对应的epoll事件处理器
       localAddr_(localAddr), peerAddr_(peerAddr) {
   channel_->setReadCallback(
       std::bind(&TcpConnection::handleRead, this, std::placeholders::_1));
