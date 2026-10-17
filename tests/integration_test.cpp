@@ -68,7 +68,7 @@ namespace {
 
 using namespace std::chrono_literals;
 
-using TcpConnectionPtr = TcpConnection::TcpConnectionPtr;
+using TransportPtr = Transport::TransportPtr;
 
 // Every round trip in this file gets this long. Real latencies on loopback are
 // microseconds, so this is pure headroom: it is short enough that a broken case
@@ -329,7 +329,7 @@ std::string makePayload(size_t len, uint32_t seed) {
 }
 
 // Echoes whatever arrives, the standard identity callback.
-void echoBack(const TcpConnectionPtr &conn, Buffer *buf, Timestamp) {
+void echoBack(const TransportPtr &conn, Buffer *buf, Timestamp) {
   conn->send(buf->retrieveAllAsString());
 }
 
@@ -348,8 +348,8 @@ protected:
   // race -- start() arms the acceptor through runInLoop, so returning from it on
   // the base loop thread is the only point at which a client is guaranteed to
   // be able to connect rather than get ECONNREFUSED.
-  uint16_t startServer(int threadNum, TcpConnection::MessageCallback onMessage,
-                       TcpConnection::ConnectionCallback onConnection = nullptr) {
+  uint16_t startServer(int threadNum, Transport::MessageCallback onMessage,
+                       Transport::ConnectionCallback onConnection = nullptr) {
     auto done = std::make_shared<std::promise<void>>();
     std::future<void> ready = done->get_future();
 
@@ -361,7 +361,7 @@ protected:
       // Wrapped rather than replaced: teardown has to know how many connections
       // the server still holds, and only this callback can tell it.
       server_->setConnectionCallback(
-          [this, onConnection](const TcpConnectionPtr &conn) {
+          [this, onConnection](const TransportPtr &conn) {
             if (conn->connected()) {
               live_.opened();
             } else {
@@ -489,7 +489,7 @@ TEST_F(IntegrationTest, SplitWriteIsReassembled) {
   // never reply at all, and the client would time out rather than quietly
   // getting half its data back.
   const uint16_t port = startServer(
-      0, [assembled, messages, expectedSize](const TcpConnectionPtr &conn,
+      0, [assembled, messages, expectedSize](const TransportPtr &conn,
                                              Buffer *buf, Timestamp) {
         messages->bump();
         assembled->append(buf->retrieveAllAsString());
@@ -678,7 +678,7 @@ TEST_F(IntegrationTest, ClientCloseIsNoticedAndServerKeepsServing) {
   auto closed = std::make_shared<Counter>();
 
   const uint16_t port = startServer(
-      0, echoBack, [opened, closed](const TcpConnectionPtr &conn) {
+      0, echoBack, [opened, closed](const TransportPtr &conn) {
         if (conn->connected()) {
           opened->bump();
         } else {
