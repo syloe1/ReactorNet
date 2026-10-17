@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <functional>
 
 namespace reactornet {
@@ -102,6 +103,45 @@ private:
   const int64_t sequence_;       // 全局唯一序列号，区分同时到期任务
 
   static int64_t s_numCreated_; // 全局定时器计数
+};
+
+// A copyable, value-type handle to a timer owned by a TimerQueue.
+//
+// It carries both the pointer and the timer's globally unique sequence number:
+// a stale handle can therefore never match a different Timer that happens to be
+// allocated at the same address (ABA protection). A default-constructed TimerId
+// is empty; cancelling it is a no-op.
+class TimerId {
+public:
+  TimerId() = default;
+  TimerId(Timer *timer, int64_t sequence)
+      : timer_(timer), sequence_(sequence) {}
+
+  Timer *timer() const { return timer_; }
+  int64_t sequence() const { return sequence_; }
+
+  bool operator==(const TimerId &rhs) const {
+    return timer_ == rhs.timer_ && sequence_ == rhs.sequence_;
+  }
+  bool operator!=(const TimerId &rhs) const { return !(*this == rhs); }
+
+private:
+  Timer *timer_ = nullptr;
+  int64_t sequence_ = 0;
+};
+
+// Strict weak ordering for TimerId in std::set. std::less gives a total order even
+// for pointers into different/deallocated objects (where operator< would be
+// unspecified); the sequence number disambiguates a reused address.
+struct TimerIdComparator {
+  bool operator()(const TimerId &lhs, const TimerId &rhs) const {
+    std::less<Timer *> less;
+    if (less(lhs.timer(), rhs.timer()))
+      return true;
+    if (less(rhs.timer(), lhs.timer()))
+      return false;
+    return lhs.sequence() < rhs.sequence();
+  }
 };
 
 } // namespace reactornet
