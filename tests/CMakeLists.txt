@@ -19,6 +19,7 @@ add_executable(reactornet_tests
     buffer_test.cpp
     event_loop_test.cpp
     timer_queue_test.cpp
+    integration_test.cpp
 )
 
 target_link_libraries(reactornet_tests PRIVATE
@@ -27,4 +28,9 @@ target_link_libraries(reactornet_tests PRIVATE
 )
 
 include(GoogleTest)
-gtest_discover_tests(reactornet_tests)
+# The integration cases drive real sockets and real worker threads, so a bug can
+# wedge one of them instead of failing an assertion. Their internal deadline is
+# 5s, so a much larger per-case budget here is pure headroom -- but it means a
+# hang is reported as a ctest failure rather than holding the CI job open until
+# the runner's own limit. Applies to the unit suites too, which are far quicker.
+gtest_discover_tests(reactornet_tests PROPERTIES TIMEOUT 60)
