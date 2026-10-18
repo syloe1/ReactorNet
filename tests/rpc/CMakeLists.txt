@@ -9,6 +9,7 @@ add_executable(reactornet_rpc_tests
     rpc_client_test.cpp
     pending_call_test.cpp
     async_call_test.cpp
+    timeout_test.cpp
 )
 
 target_link_libraries(reactornet_rpc_tests PRIVATE
