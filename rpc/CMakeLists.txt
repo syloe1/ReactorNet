@@ -13,6 +13,7 @@ add_library(reactornet_rpc STATIC
     src/protocol.cpp
     src/frame_reader.cpp
     src/raw_codec.cpp
+    src/raw_serializer.cpp
     src/service_registry.cpp
     src/rpc_server.cpp
     src/rpc_client.cpp

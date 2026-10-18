@@ -25,7 +25,9 @@ class TcpClient;
 
 namespace reactornet::rpc {
 
-// Client side of the v0.1 RPC stack: TcpClient + FrameReader + Codec.
+// Client side of the v0.1 RPC stack: TcpClient + FrameReader + Codec. The
+// payload-format id travels in every request header and is checked against the
+// response (#42); see setSerializerId().
 //
 // Requests are correlated by request id: every request gets a non-zero id and
 // its response is looked up in the loop-thread-owned pending table. Responses
@@ -93,6 +95,20 @@ public:
 
   RpcClient(EventLoop *loop, const InetAddress &serverAddr);
   ~RpcClient();
+
+  // Payload format this client asks for, written into every request header.
+  // Default kSerializerRaw (0), the only format a v0.1 peer understands.
+  // Configure before connect().
+  //
+  // The server must echo this id. A response carrying a different id means the
+  // two ends disagree about the payload format (for example, a pre-#42 server
+  // that ignored the byte and answered raw): the connection is closed and
+  // every pending call fails with kInternalError. That is deliberate -- a
+  // mismatched payload must never be handed to the application as success.
+  // A server that does understand the id but not the format answers with
+  // kUnsupportedSerializer, which passes through like any other status.
+  void setSerializerId(uint8_t serializerId);
+  uint8_t serializerId() const;
 
   // Starts one connection attempt and blocks until the handshake completes or
   // fails. The loop must already be running (e.g. an EventLoopThread).
@@ -175,6 +191,7 @@ private:
 
   RawCodec codec_;
   FrameReader frameReader_;
+  uint8_t serializerId_ = kSerializerRaw;
   TransportPtr connection_; // loop-thread only
 
   // Loop-thread owned. No lock: every access is on the connection's loop.

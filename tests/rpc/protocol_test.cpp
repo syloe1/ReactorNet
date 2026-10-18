@@ -69,6 +69,9 @@ TEST(RpcProtocolTest, ConstantsMatchRfc001) {
   EXPECT_EQ(static_cast<uint8_t>(StatusCode::kUnknownService), 0x07);
   EXPECT_EQ(static_cast<uint8_t>(StatusCode::kUnknownMethod), 0x08);
   EXPECT_EQ(static_cast<uint8_t>(StatusCode::kInternalError), 0x09);
+  EXPECT_EQ(static_cast<uint8_t>(StatusCode::kUnsupportedSerializer), 0x0D);
+  EXPECT_EQ(kSerializerRaw, 0x00);
+  EXPECT_EQ(kSerializerJson, 0x01);
 }
 
 TEST(RpcProtocolTest, GoldenRequestHeaderDecodesFieldByField) {
@@ -83,6 +86,9 @@ TEST(RpcProtocolTest, GoldenRequestHeaderDecodesFieldByField) {
   EXPECT_EQ(header.type, MessageType::kRequest);
   EXPECT_EQ(header.flags, 0);
   EXPECT_EQ(header.status, StatusCode::kOk);
+  // Old senders zeroed both reserved bytes; the first one is now the serializer
+  // id, so 0 = raw is what every pre-#42 frame decodes to.
+  EXPECT_EQ(header.serializerId, kSerializerRaw);
   EXPECT_EQ(header.requestId, 1u);
   EXPECT_EQ(header.bodyLen, 31u);
   // The RFC's self-consistency check: header + body is exactly the frame.
@@ -104,6 +110,7 @@ TEST(RpcProtocolTest, GoldenResponseHeaderDecodesFieldByField) {
   EXPECT_EQ(header.type, MessageType::kResponse);
   EXPECT_EQ(header.flags, 0);
   EXPECT_EQ(header.status, StatusCode::kOk);
+  EXPECT_EQ(header.serializerId, kSerializerRaw);
   EXPECT_EQ(header.requestId, 1u);
   EXPECT_EQ(header.bodyLen, 24u);
   EXPECT_EQ(kHeaderSize + header.bodyLen, frame.size());
@@ -124,6 +131,7 @@ TEST(RpcProtocolTest, GoldenErrorResponseHeaderDecodesFieldByField) {
   EXPECT_EQ(header.type, MessageType::kResponse);
   EXPECT_EQ(header.flags, 0);
   EXPECT_EQ(header.status, StatusCode::kUnsupportedVersion);
+  EXPECT_EQ(header.serializerId, kSerializerRaw);
   EXPECT_EQ(header.requestId, 7u);
   EXPECT_EQ(header.bodyLen, 25u);
   EXPECT_EQ(kHeaderSize + header.bodyLen, frame.size());
@@ -157,21 +165,28 @@ TEST(RpcProtocolTest, WrongMagicIsRejected) {
   EXPECT_FALSE(decodeHeader(frame.data(), frame.size(), &header));
 }
 
-TEST(RpcProtocolTest, ReservedAndUndefinedFlagBitsAreNotJudgedHere) {
-  // RFC-0001 §8: receivers ignore reserved bytes and undefined flag bits. That
-  // tolerance is the codec's job; judging defined-but-unimplemented bits and
-  // the bodyLen ceiling is the frame reader's (#28).
+TEST(RpcProtocolTest, SerializerByteIsDecodedAndReservedByteIsIgnored) {
+  // RFC-0001 §4.2/§8: byte 6 is the serializer id, byte 7 is still reserved and
+  // must be ignored, and undefined flag bits are ignored too. Judging the id
+  // belongs to RpcServer/RpcClient (#42), not to this pure codec.
   std::string frame = copyBytes(kGoldenRequest, sizeof(kGoldenRequest));
   frame.resize(kHeaderSize);
   frame[4] = static_cast<char>(0xFC); // bits 2-7
-  frame[6] = static_cast<char>(0xAA); // reserved
-  frame[7] = static_cast<char>(0xBB);
+  frame[6] = static_cast<char>(kSerializerJson);
+  frame[7] = static_cast<char>(0xBB); // reserved, deliberately garbage
 
   MessageHeader header{};
   ASSERT_TRUE(decodeHeader(frame.data(), frame.size(), &header));
   EXPECT_EQ(header.flags, 0xFC);
+  EXPECT_EQ(header.serializerId, kSerializerJson);
   EXPECT_EQ(header.requestId, 1u);
   EXPECT_EQ(header.bodyLen, 31u);
+
+  // Re-encoding normalises the ignored reserved byte back to zero.
+  std::array<char, kHeaderSize> encoded{};
+  encodeHeader(header, encoded.data());
+  EXPECT_EQ(encoded[6], static_cast<char>(kSerializerJson));
+  EXPECT_EQ(encoded[7], '\0');
 }
 
 TEST(RpcProtocolTest, RoundTripPreservesEveryField) {
@@ -181,6 +196,7 @@ TEST(RpcProtocolTest, RoundTripPreservesEveryField) {
   in.type = MessageType::kResponse;
   in.flags = 0xF0; // undefined bits pass through
   in.status = StatusCode::kInternalError;
+  in.serializerId = kSerializerJson;
   in.requestId = 0xDEADBEEFu;
   in.bodyLen = 0x00012345u;
 
@@ -195,6 +211,7 @@ TEST(RpcProtocolTest, RoundTripPreservesEveryField) {
   EXPECT_EQ(out.type, in.type);
   EXPECT_EQ(out.flags, in.flags);
   EXPECT_EQ(out.status, in.status);
+  EXPECT_EQ(out.serializerId, in.serializerId);
   EXPECT_EQ(out.requestId, in.requestId);
   EXPECT_EQ(out.bodyLen, in.bodyLen);
 }

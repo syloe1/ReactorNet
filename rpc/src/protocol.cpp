@@ -73,8 +73,8 @@ void encodeHeader(const MessageHeader &header, char *out) {
   out[3] = static_cast<char>(header.type);
   out[4] = static_cast<char>(header.flags);
   out[5] = static_cast<char>(header.status);
+  out[6] = static_cast<char>(header.serializerId);
   // reserved: RFC-0001 §4.2 requires senders to write zero.
-  out[6] = 0;
   out[7] = 0;
   putU32(out + 8, header.requestId);
   putU32(out + 12, header.bodyLen);
@@ -97,7 +97,8 @@ bool decodeHeader(const char *in, size_t len, MessageHeader *out) {
   out->type = static_cast<MessageType>(in[3]);
   out->flags = static_cast<uint8_t>(in[4]);
   out->status = static_cast<StatusCode>(in[5]);
-  // in[6], in[7] are reserved: deliberately skipped.
+  out->serializerId = static_cast<uint8_t>(in[6]);
+  // in[7] is reserved: deliberately ignored, as RFC-0001 §8 requires.
   out->requestId = getU32(in + 8);
   out->bodyLen = getU32(in + 12);
   return true;

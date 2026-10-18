@@ -37,6 +37,12 @@ RpcClient::RpcClient(EventLoop *loop, const InetAddress &serverAddr)
       [this](int savedErrno) { onConnectError(savedErrno); });
 }
 
+void RpcClient::setSerializerId(uint8_t serializerId) {
+  serializerId_ = serializerId;
+}
+
+uint8_t RpcClient::serializerId() const { return serializerId_; }
+
 RpcClient::~RpcClient() {
   // TcpClient (and the Connector inside it) is loop-thread owned.
   loop_->assertInLoopThread();
@@ -211,8 +217,17 @@ void RpcClient::onMessage(const TransportPtr & /*transport*/, Buffer *buf,
       return;
     }
 
+    if (header.serializerId != serializerId_) {
+      // The server answered in a format we did not ask for. Decoding it as if
+      // it were ours is the silent-corruption case RFC-0001 §9.4 exists to
+      // prevent; the id echo turns it into an explicit connection failure.
+      failConnection();
+      return;
+    }
+
     Response response;
     response.status = header.status;
+    response.serializerId = header.serializerId;
     if (!codec_.decodeResponse(body, &response)) {
       failConnection();
       return;
@@ -279,6 +294,7 @@ void RpcClient::startCallInLoop(const Request &request, Completion complete,
   header.type = MessageType::kRequest;
   header.flags = 0;
   header.status = StatusCode::kOk;
+  header.serializerId = serializerId_;
   header.requestId = requestId;
   header.bodyLen = static_cast<uint32_t>(body.size());
 

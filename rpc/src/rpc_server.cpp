@@ -39,6 +39,12 @@ void RpcServer::setMaxInputBufferSize(size_t maxInputBufferSize) {
       maxInputBufferSize == 0 ? 0 : std::max(maxInputBufferSize, kHeaderSize);
 }
 
+void RpcServer::setSerializerId(uint8_t serializerId) {
+  serializerId_ = serializerId;
+}
+
+uint8_t RpcServer::serializerId() const { return serializerId_; }
+
 void RpcServer::start() {
   // Freeze before accepting: from here on dispatch() runs concurrently on
   // every IO loop, and the registry's lock-free reads depend on there being
@@ -117,6 +123,18 @@ void RpcServer::onMessage(const TransportPtr &conn, Buffer *buf,
       return;
     }
 
+    if (header.serializerId != serializerId_) {
+      // The envelope decoded and the frame is complete, so the stream is still
+      // in sync: answer explicitly and keep serving. Sending a payload the
+      // server cannot interpret would be a silent application-level failure,
+      // which is exactly what RFC-0001 §9.4 forbids.
+      Response rejection;
+      rejection.status = StatusCode::kUnsupportedSerializer;
+      rejection.serializerId = header.serializerId; // echo: no guessing
+      sendResponse(conn, header.requestId, rejection);
+      continue;
+    }
+
     handleRequest(conn, header, body);
   }
 }
@@ -161,6 +179,10 @@ void RpcServer::handleRequest(const TransportPtr &conn,
   } catch (...) {
     response = Response{StatusCode::kInternalError, ""};
   }
+  // Echo the request's payload format, including on the exception path where
+  // dispatch never got to set it. A response in a different format would be
+  // rejected by the client as a silent-corruption case (#42).
+  response.serializerId = header.serializerId;
   sendResponse(conn, header.requestId, response);
 }
 
@@ -181,6 +203,7 @@ void RpcServer::sendResponse(const TransportPtr &conn, uint32_t requestId,
   header.type = MessageType::kResponse;
   header.flags = 0;
   header.status = response.status;
+  header.serializerId = response.serializerId;
   header.requestId = requestId;
   header.bodyLen = static_cast<uint32_t>(body.size());
 

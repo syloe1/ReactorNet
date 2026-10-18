@@ -26,6 +26,7 @@ RN RPC 帧 = **16 字节定长帧头** + **变长 body**。
 - 分帧靠帧头尾部的 `body_len`（长度前缀），不靠任何分隔符——因为 TCP 上没有可靠的分隔符。
 - `msg_type` 区分 REQUEST / RESPONSE；`request_id` 把两者配对。
 - v0.1 的 payload 是**不透明字节**：协议层不解析，原样交给上层。这么做是为了把序列化决策推迟到 M5（#41），不阻塞网络层（M1）先落地。
+- 帧头的 `serializer` 字节（#42）告诉对端 payload 用哪种格式；它最初是保留字节的第一位，`0` 仍然表示原始的透明 payload，因此没有升 `version`。
 
 ---
 
@@ -61,11 +62,11 @@ RN RPC 帧 = **16 字节定长帧头** + **变长 body**。
 ### 4.1 总览
 
 ```
-+---------------------- 16 字节固定帧头 ----------------------+------- body -------+
-| magic | ver | type | flags | status | reserved | request_id | body_len |   body  |
-|  2B   | 1B  |  1B  |  1B   |   1B   |    2B    |     4B     |    4B    | body_len|
-+------------------------------------------------------------+----------+---------+
- 0        2      3      4        5         6           8          12         16
++--------------------------- 16 字节固定帧头 ---------------------------+----- body -----+
+| magic | ver | type | flags | status | serializer | reserved | request_id | body_len |
+|  2B   | 1B  |  1B  |  1B   |   1B   |     1B     |    1B    |     4B     |    4B    |
++-----------------------------------------------------------------------+----------------+
+ 0        2      3      4        5          6          7          8           12
 ```
 
 ### 4.2 帧头字段表
@@ -79,7 +80,8 @@ RN RPC 帧 = **16 字节定长帧头** + **变长 body**。
 | 3 | 1 | `msg_type` | `u8` | `1` = REQUEST，`2` = RESPONSE；其余值保留 | MUST 写 `1` 或 `2` | 未知 → 回 `UNSUPPORTED_MSG_TYPE` 后关闭 |
 | 4 | 1 | `flags` | 位域 `u8` | 见 §4.5 | v0.1 MUST 写 `0x00` | 未定义位 MUST 忽略；已定义未实现位 → 拒收（`UNSUPPORTED_FLAG`） |
 | 5 | 1 | `status` | `u8` | 见 §4.6。RESPONSE：`0x00`–`0xFF`；REQUEST：**只能为 `0x00`** | REQUEST MUST 写 `0x00`；RESPONSE 填结果码 | REQUEST 中非 `0` → 拒收。RESPONSE 中未知值 → 按「失败」容忍（§8） |
-| 6 | 2 | `reserved` | 2× `u8` | 发送：只能 `00 00`；接收：任意值均忽略 | MUST 写 `00 00` | MUST 忽略其值，**MUST NOT 复用为业务字段**（§9） |
+| 6 | 1 | `serializer` | `u8` | `0x00` = raw（不透明字节，v0.1 语义）；`0x01` = JSON（#43）；其余保留 | REQUEST MUST 写自己期望的 payload 格式（v0.1 兼容实现写 `0x00`）；RESPONSE MUST 回显请求里的值 | REQUEST 中不认识 → 回 `UNSUPPORTED_SERIALIZER`（连接可继续）；RESPONSE 中与请求不一致 → 按失败处理（§8、§9.5） |
+| 7 | 1 | `reserved` | `u8` | 发送：只能 `00`；接收：任意值均忽略 | MUST 写 `00` | MUST 忽略其值，**MUST NOT 复用为业务字段**（§9） |
 | 8 | 4 | `request_id` | `u32` LE | `1` – `0xFFFFFFFF`；**`0` 非法** | 客户端分配；RESPONSE MUST 回显请求里的值 | `0` → 回 `BAD_REQUEST_ID` 后关闭 |
 | 12 | 4 | `body_len` | `u32` LE | `0` – 本实现上限（见 §4.4） | MUST 等于实际 body 字节数 | 超本实现上限 → 拒收（`BODY_TOO_LARGE`）；**MUST NOT 按声明长度分配内存** |
 | 16 | 变长 | `body` | 字节序列 | 见 §4.3 | —— | 长度必须恰好等于 `body_len` |
