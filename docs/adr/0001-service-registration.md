@@ -4,7 +4,7 @@
 |---|---|
 | ADR 编号 | 0001 |
 | 标题 | 无运行期反射下的 Service/Method 注册方案 |
-| 状态 | Proposed（随本 PR 合入后转为 Accepted） |
+| 状态 | Accepted |
 | 日期 | 2026-10-17 |
 | 对应 issue | #17 |
 | 依赖 | RFC-0001（线格式）、RFC-002（分层与线程模型） |
@@ -63,6 +63,8 @@ RPC 服务端需要回答两个问题：
 | M9（#48） | **E**：自研 IDL + codegen | 方法名、类型、thunk 自动生成 |
 
 A 不是一次性原型：它的表结构与 C 相同，因此 C 落地时不需要迁移已注册的服务，也不需要改 dispatcher。D 与 E 都是**前端**，分别用 protobuf 描述符和自研 IDL 生成同样的表项。
+
+**实现状态（2026-10-18）：** #30 的 `ServiceRegistry` 已按方案 A 落地（表项是 `std::function<std::string(std::string_view)>`）；#42/#43 已提供 `Serializer` 接缝与通用的 `JsonValue` / JSON 编解码，但它**不是**本 ADR 的类型化前端 C。把 `Req`/`Resp` 结构体映射到 `JsonValue` 的 traits / thunk 仍属于 #44–#46。
 
 ---
 
@@ -282,7 +284,7 @@ thunk 的存储形态有三种常见做法。C 方案选用 `std::function`。
 - **名字必须显式传**：C++17 拿不到成员名；重载方法还要 `static_cast`。这是语言限制，不是实现遗漏。
 - **service 对象的生命周期**：thunk 捕获 `C*`，注册表不拥有对象。对象必须活得比 server 久，或由注册表持有 `shared_ptr`——所有权模型由 #45 决定，本 ADR 只标记这个事实。
 - **没有运行期动态注册**：冻结后只读（RFC-002 §7.3）。需要动态注册就得改文档并引入同步，不能悄悄加锁。
-- **序列化的类型映射仍然存在**：C 的 thunk 要求 `serializer_.decode<Req>` / `encode(Resp)` 可实例化。JSON 在没有反射时如何把字段映射到结构体，是 ADR-002/#43 的问题；本 ADR 不假装它不存在。
+- **序列化的类型映射仍然存在**：C 的 thunk 要求 `serializer_.decode<Req>` / `encode(Resp)` 可实例化。JSON 在没有反射时如何把字段映射到结构体，仍属 #44/#46/#48；#43 只交付了通用的 `JsonValue` 对象模型与 JSON 文本编解码，本 ADR 不假装类型映射已经解决。
 
 ### 8.3 中性
 
@@ -315,7 +317,7 @@ consteval auto method_table() {
 
 - 方法名不用再手写字符串；
 - 重载方法可以按签名区分；
-- JSON Serializer 可以遍历 non-static data members 自动生成字段映射（#43 的长期形态）；
+- JSON Serializer 可以遍历 non-static data members 自动生成字段映射（#44/#48 的长期形态；#43 仅提供通用 `JsonValue`）；
 - IDL（#48）可以在编译期检查方法签名与协议约束。
 
 **不会改变的部分：**
@@ -338,7 +340,7 @@ consteval auto method_table() {
 | #30 ServiceRegistry | 表项形态是「字节进、字节出」的擦除调用；注册表冻结后只读；分发不携带类型 |
 | #41 ADR-002 序列化选型 | C 的 thunk 要求 `decode<Req>` / `encode(Resp)`；D 是其中一个实现；选型必须能支持 §5.4 的类型 |
 | #42 Codec/Serializer 拆分 | thunk 依赖 Serializer，不依赖帧层 Codec；帧层仍然是 RFC-0001 的字节布局 |
-| #43 JSON Serializer | 无反射时的字段映射方式（显式 traits / ADL）由该 issue 决定 |
+| #43 JSON Serializer（已交付） | 提供通用 `JsonValue` 与 JSON 文本编解码；**不**提供 `Req`/`Resp` 字段映射，后者留给 #44/#46 |
 | #44 类型化注册 | 实现 §5.1 的 `Signature` traits 与 §5.4 的五种签名；错误信息用 `static_assert` 友好化 |
 | #45 Service 绑定与生命周期 | 决定注册表是否持有 service 对象；thunk 捕获的 `C*` 必须有效 |
 | #46 类型化 Stub | 客户端复用同一套 `Req`/`Resp` traits；不要求运行期反射 |
@@ -365,7 +367,7 @@ consteval auto method_table() {
 
 | # | 问题 | 为什么现在不定 |
 |---|---|---|
-| 1 | JSON 无反射时如何映射 `Req`/`Resp` 字段 | 属 ADR-002 / #43。可选 ADL `from_json`、显式 traits、或第三方库的宏；本 ADR 不预设 |
+| 1 | JSON 无反射时如何映射 `Req`/`Resp` 字段 | #43 只交付通用 `JsonValue`，此问题仍属 #44/#46。可选 ADL `from_json`、显式 traits、或第三方库的宏；本 ADR 不预设 |
 | 2 | 注册表是否拥有 service 对象 | 影响 #30/#45 的接口与生命周期；等实际使用形态（栈对象 vs `shared_ptr`）明确后再定 |
 | 3 | 形态 4 的 `Status` 具体是什么类型 | 依赖 #39 的错误模型；本 ADR 只要求它可被错误模型识别 |
 | 4 | 重载方法的名字约定 | 需要显式名或签名后缀；由 #44 在使用中收敛 |
@@ -391,3 +393,4 @@ consteval auto method_table() {
 | 版本 | 日期 | 说明 |
 |---|---|---|
 | v0.1 | 2026-10-17 | 初稿：A–E 五方案对比、编译期类型推导与 thunk 类型擦除机制、五种签名形态、protobuf 非主线的理由、三种类型擦除实现、C++26 反射前瞻、6 条开放问题 |
+| v0.2 | 2026-10-18 | #30/#42/#43 落地后的实现注记：注册表按方案 A 交付；JSON serializer 只提供通用 `JsonValue`，类型化映射仍属 #44/#46 |

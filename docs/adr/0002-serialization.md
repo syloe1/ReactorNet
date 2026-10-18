@@ -4,7 +4,7 @@
 |---|---|
 | ADR 编号 | 0002 |
 | 标题 | RPC payload 序列化选型 |
-| 状态 | Proposed（随本 PR 合入后转为 Accepted） |
+| 状态 | Accepted |
 | 日期 | 2026-10-18 |
 | 对应 issue | #41 |
 | 依赖 | RFC-0001（线格式）、#29（Serializer 接缝） |
@@ -69,7 +69,7 @@ struct User {
 五种编码：
 
 - **raw binary**：8 字节 id + 4 字节 score + bool + tag 数量 + 4×int32 + 两个长度前缀字符串。
-- **JSON**：手写 writer；decoder 是按固定 schema 扫描的 parser（不是通用 JSON parser）。
+- **JSON**：手写 writer；基准里的 decoder 是按固定 `User` schema 扫描的 parser。它**不是**库里的通用 JSON parser（通用实现见 #43 与 §6.1）。
 - **MessagePack**：fixmap 6 项，字符串用 fixstr，整数用正 fixint / uint64，数组用 fixarray。
 - **protobuf wire**：字段号 1–6，varint、length-delimited、packed repeated；**不使用 libprotobuf**，手写 wire format。
 - **FlatBuffers-style**：手写固定偏移布局；decode 返回指向缓冲区的 view，不复制字符串与数组。
@@ -141,9 +141,11 @@ cmake --build build-bench --target serialization_bench -j
 
 ### 6.1 主线：零依赖手写 JSON
 
-- 参考实现默认 serializer 命名为 `json`，`Serializer::name()` 返回 `"json"`。
-- 只实现一个**明确的子集**：对象、数组、字符串、布尔、整数、`null` 不需要；不支持浮点（等真有需求再加，避免一开始就踩精度与格式化的坑）。
-- 解析器必须有深度上限、明确的错误返回、完整的 `\uXXXX` 与 UTF-8 校验（#43 的验收项）。
+- `JsonSerializer` 的 `id()` 为 `1`、`name()` 为 `"json"`。**两端默认仍是 raw（id `0`）**，这是 v0.1 兼容行为；example 通过 `setSerializerId(kSerializerJson)` 显式启用 JSON。
+- 对象模型是通用的 `JsonValue`：`null`、`bool`、`int64_t`、`double`、`string`、`array`、`object`。整数与浮点分开存储（`isInteger()`），对象保留插入顺序。这里是 #43 相对本 ADR 初稿的扩展：初稿只计划整数、不含浮点与 `null`。
+- JSON 文本由 `JsonWriter` 与 `JsonParser` 负责（#43），遵循 RFC 8259：只接受 4 个空白字符、拒绝尾随垃圾、完整处理 `\uXXXX` 与代理对、校验 UTF-8、深度上限默认 64 且在递归前检查。
+- 数字输出用 `std::to_chars` 的最短 round-trip 表示；非有限值（NaN/Inf）拒绝编码。字符串中的控制字符、引号、反斜杠按 JSON 转义，非法 UTF-8 拒绝编码。
+- 失败契约：`encode` / `decode` 返回 `false` 时不得留下可被误认为成功的半成品输出；解析器的输出参数只在成功后赋值。
 - 序列化后的 payload 应该能被 `nc` 直接看到，这是调试价值，不是副产品。
 
 ### 6.2 插件：protobuf
@@ -154,17 +156,18 @@ cmake --build build-bench --target serialization_bench -j
 class Serializer {
 public:
   virtual ~Serializer() = default;
-  virtual std::string name() const = 0;                 // 写进信封
+  virtual std::string name() const = 0;                 // "raw" / "json"，日志用
+  virtual uint8_t id() const = 0;                       // 写进帧头 serializer 字节
   virtual bool encode(const JsonValue&, std::string*) = 0;
   virtual bool decode(std::string_view, JsonValue*) = 0;
 };
 ```
 
-protobuf 插件实现同一个接口，在**构建时可选**（`-DREACTORNET_WITH_PROTOBUF=ON`），核心库与默认构建不依赖它。双方的 `name()` 写进信封的 serializer 标识；不一致时返回明确错误，而不是尝试猜测。
+protobuf 插件实现同一个接口，在**构建时可选**（规划中的 `-DREACTORNET_WITH_PROTOBUF=ON`），核心库与默认构建不依赖它。双方的 `id()` 写进帧头；响应必须回显请求的 id。不一致时返回明确错误（客户端关闭连接），而不是尝试猜测。`name()` 只用于日志与配置，不上线路。
 
 ### 6.3 为什么不是「先写 raw，以后再换」
 
-`RawCodec` 的 payload 目前是调用方自己拼的字节，没有类型信息。JSON 是第一个把「对象 ↔ 字节」这件事显式化的实现；有了它，#44 的类型化注册与 #46 的 typed stub 才有共同的对象模型。先做 raw 再换，等于让两批调用方各写一遍映射。
+`RawSerializer` 的 payload 是调用方自己拼的字节，没有类型信息。JSON 是第一个把「对象 ↔ 字节」这件事显式化的实现；有了它，#44 的类型化注册与 #46 的 typed stub 才有共同的对象模型。先做 raw 再换，等于让两批调用方各写一遍映射。
 
 ---
 
@@ -178,11 +181,13 @@ protobuf 插件实现同一个接口，在**构建时可选**（`-DREACTORNET_WI
 4. **性能不是当前瓶颈。** §4 的差距在每秒十万级调用、payload 小于 100 字节时才显著；参考实现当前的目标是正确性、可观察性和演进空间。等真实负载证明序列化是瓶颈，`Serializer` 接缝允许在不改协议、不改分发的前提下替换。
 5. **演进能力可以后补，耦合不行。** protobuf 的 schema 演进优势在跨团队、跨语言、长期兼容时最值钱。这个项目现在既没有跨团队 API，也没有多语言实现；先接受它的依赖和工具链成本，是为一个尚未出现的问题付费。
 
-**什么时候应该改主线：** 出现稳定的跨语言调用方、payload 结构频繁独立演进、或 profile 明确指向序列化热点。届时按 §6.2 接入 protobuf，`name()` 协商保证新旧两端不会静默误解。
+**什么时候应该改主线：** 出现稳定的跨语言调用方、payload 结构频繁独立演进、或 profile 明确指向序列化热点。届时按 §6.2 接入 protobuf，帧头 `serializer` id 的显式匹配保证新旧两端不会静默误解。
 
 ---
 
 ## 8. 对后续 issue 的约束
+
+**实现状态（2026-10-18）：** #42（Codec/Serializer 拆分、帧头 serializer id）与 #43（`JsonValue`、`JsonWriter`、`JsonParser`、`JsonSerializer`）已合入 `dev`。`JsonSerializer` 目前只提供通用的 `JsonValue` 对象模型；把 C++ 结构体映射到 `JsonValue` 的类型化 API 仍属于 #44/#46/#48，尚未实现。
 
 - **#42**：`Codec` 负责帧 + envelope，`Serializer` 负责 payload；拆分的验收标准是既有 RPC 测试行为零变化。信封增加 serializer 标识需要论证兼容性（预留位 vs 升 version），ADR-001/RFC-0001 的纪律同样适用。
 - **#43**：JSON 实现必须包含：深度上限、转义、UTF-8 校验、错误位置或可诊断的失败返回、round-trip 与 fuzz 测试。不得引入第三方 JSON 库。
@@ -202,7 +207,7 @@ protobuf 插件实现同一个接口，在**构建时可选**（`-DREACTORNET_WI
 **负面 / 风险：**
 
 - JSON 的体积与 decode 开销高于二进制方案；高频场景需要接受或替换。
-- 手写 JSON 需要自己保证正确性（转义、UTF-8、深度、数字边界），#43 必须用 fuzz 与边界测试兜住。
+- 手写 JSON 需要自己保证正确性（转义、UTF-8、深度、数字边界）；#43 已用边界测试与固定种子 fuzz 覆盖这些路径。
 - 自描述格式没有编译期 schema 校验，字段名拼写错误只能在运行期发现；类型化 API（#44/#46）需要承担这部分检查。
 
 **重新评估的触发条件：**
@@ -222,3 +227,12 @@ cmake --build build-bench --target serialization_bench -j
 ```
 
 输出即 §4.3 的表格；参数 `--iterations` / `--repeat` 可调整。基准源码：`bench/serialization_bench.cpp`。
+
+---
+
+## 修订历史
+
+| 版本 | 日期 | 说明 |
+|---|---|---|
+| v0.1 | 2026-10-18 | 初稿：raw / JSON / MessagePack / protobuf / FlatBuffers 对比与微基准，决定零依赖手写 JSON 为主线、protobuf 为插件 |
+| v0.2 | 2026-10-18 | #42/#43 落地后的实现注记：`id()` 随帧头传输、通用 `JsonValue` 对象模型（含浮点与 `null`）、UTF-8/深度/转义保证；明确类型化映射仍属 #44/#46 |
