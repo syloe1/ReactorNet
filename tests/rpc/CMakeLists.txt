@@ -5,6 +5,7 @@ add_executable(reactornet_rpc_tests
     frame_reader_test.cpp
     codec_test.cpp
     registry_test.cpp
+    rpc_server_test.cpp
 )
 
 target_link_libraries(reactornet_rpc_tests PRIVATE
