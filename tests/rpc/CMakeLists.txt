@@ -14,6 +14,7 @@ add_executable(reactornet_rpc_tests
     async_call_test.cpp
     concurrent_call_test.cpp
     timeout_test.cpp
+    error_model_test.cpp
 )
 
 target_link_libraries(reactornet_rpc_tests PRIVATE

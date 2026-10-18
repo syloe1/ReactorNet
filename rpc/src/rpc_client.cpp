@@ -12,7 +12,13 @@ namespace reactornet::rpc {
 
 namespace {
 
-Response errorResponse() { return Response{StatusCode::kInternalError, ""}; }
+// Failure results produced by the client itself. They never carry a server
+// status: the server never saw the request, or the stream was already broken.
+Response connectionClosedResponse() {
+  return Response{StatusCode::kConnectionClosed, ""};
+}
+
+Response badRequestResponse() { return Response{StatusCode::kBadRequest, ""}; }
 
 Response timeoutResponse() { return Response{StatusCode::kTimeout, ""}; }
 
@@ -89,7 +95,7 @@ Response RpcClient::Call(const Request &request, double timeoutSeconds) {
     // guaranteed deadlock. Fail fast instead.
     assert(false &&
            "RpcClient::Call() blocks; never call it on the loop thread");
-    return errorResponse();
+    return badRequestResponse();
   }
 
   // The future is resolved by a matching response, the deadline, or a
@@ -241,13 +247,18 @@ void RpcClient::startCallInLoop(const Request &request, Completion complete,
   assert(complete && "a pending call needs a completion");
 
   if (connection_ == nullptr || !connected_.load()) {
-    complete(errorResponse());
+    // No peer, no stream: the request was never sent. This also covers a
+    // failed connect(): connect() does not throw, and the next call reports
+    // the connection state here.
+    complete(connectionClosedResponse());
     return;
   }
 
   std::string body;
   if (!codec_.encodeRequest(request, &body)) {
-    complete(errorResponse());
+    // The request itself is invalid (empty service/method, body too large).
+    // The connection is untouched.
+    complete(badRequestResponse());
     return;
   }
 
@@ -341,7 +352,10 @@ void RpcClient::failAllPending() {
     if (entry.second.timer != TimerId{}) {
       loop_->cancelTimer(entry.second.timer);
     }
-    entry.second.complete(errorResponse());
+    // Whatever caused this (peer close, orderly disconnect, destruction), no
+    // response can arrive any more. kConnectionClosed tells the caller the
+    // failure is the transport, not the remote handler.
+    entry.second.complete(connectionClosedResponse());
   }
 }
 
