@@ -5,6 +5,8 @@ add_executable(reactornet_rpc_tests
     frame_reader_test.cpp
     codec_test.cpp
     registry_test.cpp
+    rpc_fixture.cpp
+    rpc_fixture_test.cpp
     rpc_server_test.cpp
     rpc_client_test.cpp
     pending_call_test.cpp
