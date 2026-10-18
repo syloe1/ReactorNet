@@ -2,6 +2,38 @@
 
 namespace reactornet::rpc {
 
+const char *statusToString(StatusCode status) {
+  switch (status) {
+  case StatusCode::kOk:
+    return "OK";
+  case StatusCode::kUnsupportedVersion:
+    return "UNSUPPORTED_VERSION";
+  case StatusCode::kUnsupportedMsgType:
+    return "UNSUPPORTED_MSG_TYPE";
+  case StatusCode::kUnsupportedFlag:
+    return "UNSUPPORTED_FLAG";
+  case StatusCode::kBadRequestId:
+    return "BAD_REQUEST_ID";
+  case StatusCode::kBodyTooLarge:
+    return "BODY_TOO_LARGE";
+  case StatusCode::kMalformedBody:
+    return "MALFORMED_BODY";
+  case StatusCode::kUnknownService:
+    return "UNKNOWN_SERVICE";
+  case StatusCode::kUnknownMethod:
+    return "UNKNOWN_METHOD";
+  case StatusCode::kInternalError:
+    return "INTERNAL_ERROR";
+  case StatusCode::kTimeout:
+    return "TIMEOUT";
+  case StatusCode::kConnectionClosed:
+    return "CONNECTION_CLOSED";
+  case StatusCode::kBadRequest:
+    return "BAD_REQUEST";
+  }
+  return "UNKNOWN_STATUS";
+}
+
 static_assert(kHeaderSize == 16, "RFC-0001 fixes the frame header at 16 bytes");
 
 namespace {

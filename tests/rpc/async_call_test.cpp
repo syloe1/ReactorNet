@@ -191,7 +191,7 @@ TEST_F(AsyncCallTest, ImmediateFailureCallbackAlsoRunsOnTheLoopThread) {
                      });
 
   ASSERT_TRUE(waitForCompletions(state, 1));
-  EXPECT_EQ(state->responses[0].status, StatusCode::kInternalError);
+  EXPECT_EQ(state->responses[0].status, StatusCode::kConnectionClosed);
   ASSERT_EQ(state->threads.size(), 1u);
   EXPECT_EQ(state->threads[0], loopId)
       << "an immediate failure must not run the callback on the caller thread";

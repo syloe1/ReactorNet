@@ -32,19 +32,28 @@ enum class MessageType : uint8_t { kRequest = 1, kResponse = 2 };
 // application-defined.
 enum class StatusCode : uint8_t {
   kOk = 0x00,
+  // Protocol-level failures: the server answers and then closes the
+  // connection (RFC-0001 §4.6).
   kUnsupportedVersion = 0x01,
   kUnsupportedMsgType = 0x02,
   kUnsupportedFlag = 0x03,
   kBadRequestId = 0x04,
   kBodyTooLarge = 0x05,
   kMalformedBody = 0x06,
+  // Application-level failures: the connection stays usable.
   kUnknownService = 0x07,
   kUnknownMethod = 0x08,
-  kInternalError = 0x09,
-  // Client-side deadline expired (#38). A server never sends this status; it
-  // exists so callers get a typed result instead of a generic error.
-  kTimeout = 0x0A,
+  kInternalError = 0x09, // handler threw; RpcServer catches it (#39)
+  // Client-local results. They never appear on the wire: a server does not
+  // know about the caller's deadline or connection state.
+  kTimeout = 0x0A,          // deadline expired (#38)
+  kConnectionClosed = 0x0B, // no connection, peer closed, or stream corrupted
+  kBadRequest = 0x0C,       // request rejected before it was sent (#39)
 };
+
+// Stable, human-readable name for logs and diagnostics. Unknown values return
+// "UNKNOWN_STATUS".
+const char *statusToString(StatusCode status);
 
 struct MessageHeader {
   uint16_t magic; // 0x4E52
