@@ -6,12 +6,21 @@
 
 namespace reactornet {
 
-// Represents a timestamp as microseconds since epoch.
+// Represents a point in time as microseconds from an arbitrary epoch.
 // Used for timer expiration comparison.
+//
+// The epoch has no calendar meaning: it is steady_clock's epoch
+// (CLOCK_MONOTONIC on Linux), the same clock timerfd runs on. Treat a
+// Timestamp as a duration since boot, never as wall-clock time; do not format
+// it or mix it with system_clock values. Only differences are meaningful, and
+// an NTP step cannot make those jump.
+// 时间戳表示「自某个任意纪元起的微秒数」，不是墙上时间。改用单调时钟后
+// microSecondsSinceEpoch_ 这个名字已名不副实；改名会扩散到大量调用点，
+// 所以保留字段名，以这里的注释为准。
 class Timestamp { // 时间戳类
 public:
-  // 系统墙上时钟
-  using Clock = std::chrono::system_clock;
+  // 单调时钟：与 timerfd 的 CLOCK_MONOTONIC 同源，不受 NTP 调时影响
+  using Clock = std::chrono::steady_clock;
   using Microseconds = std::chrono::microseconds;
 
   Timestamp() : microSecondsSinceEpoch_(0) {}
@@ -25,7 +34,8 @@ public:
   }
 
   int64_t microSecondsSinceEpoch() const { return microSecondsSinceEpoch_; }
-  // 判断是不是合法时间
+  // 判断是不是合法时间。默认构造为 0（无效）；单调时钟在开机后恒为正，
+  // 因此 > 0 依然成立，不存在隐含的「1970 纪元」假设。
   bool valid() const { return microSecondsSinceEpoch_ > 0; }
   // 增加秒数
   Timestamp &operator+=(double seconds) {

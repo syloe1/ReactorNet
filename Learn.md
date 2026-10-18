@@ -186,7 +186,7 @@ while (!quit_) {
 ### 3.1 `include/Timer.h` + `src/Timer.cpp`
 **15 分钟** — 两个类：
 
-- **Timestamp**：微秒级时间戳，提供算术运算符（相减、加秒数）。
+- **Timestamp**：微秒级时间点，提供算术运算符（相减、加秒数）。时钟源是 `std::chrono::steady_clock`（Linux 上即 `CLOCK_MONOTONIC`），与 `timerfd_create()` 用的是同一个时钟。因此它表示的是「自某个任意纪元（通常是开机）起的时长」，**不是墙上时间**：不要拿它格式化日期，也不要和 `system_clock` 的值混用；只有两个 Timestamp 的差值有意义。这样 NTP 调时（阶跃或缓慢调整）不会让已经排好的超时提前或推迟。字段名 `microSecondsSinceEpoch_` 是历史遗留，改名会扩散到很多调用点，所以只保留注释说明。
 - **Timer**：一个定时器对象，包含回调函数、过期时间、重复间隔、全局序列号。
 
 注意 `Timer::operator<` 的反向比较：这是为了让 `std::priority_queue` 变成最小堆（最早过期的在堆顶）。
