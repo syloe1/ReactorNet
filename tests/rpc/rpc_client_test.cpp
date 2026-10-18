@@ -154,7 +154,7 @@ TEST_F(RpcE2E, PeerCloseWhileCallPendingReturnsError) {
   // ctest's timeout instead of returning.
   const Response response =
       client_->Call(Request{"Echo", "Echo", "no answer"});
-  EXPECT_EQ(response.status, StatusCode::kInternalError);
+  EXPECT_EQ(response.status, StatusCode::kConnectionClosed);
   EXPECT_EQ(response.payload, "");
 }
 

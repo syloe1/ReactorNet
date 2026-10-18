@@ -289,7 +289,7 @@ TEST_F(PendingCallTest, UnknownResponseIdClosesTheConnection) {
   ASSERT_NO_FATAL_FAILURE(connectClient());
 
   const Response response = client_->Call(Request{"Echo", "Echo", "0"});
-  EXPECT_EQ(response.status, StatusCode::kInternalError);
+  EXPECT_EQ(response.status, StatusCode::kConnectionClosed);
 
   // The client must tear the connection down, not merely ignore the frame.
   const std::shared_future<void> down = server_->downFuture();
