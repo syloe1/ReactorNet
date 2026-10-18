@@ -4,6 +4,7 @@
 
 #include <dirent.h>
 
+#include <atomic>
 #include <chrono>
 #include <string>
 #include <thread>
@@ -97,12 +98,15 @@ TEST(RpcFixture, FiftyCreateDestroyCyclesLeakNoFileDescriptors) {
 }
 
 TEST(WaitFor, ReturnsAsSoonAsThePredicateHolds) {
-  bool ready = false;
+  // std::atomic: the predicate runs on this thread while the setter writes from
+  // another. A plain bool here is itself a data race and makes TSan fail the
+  // test before it can check waitFor().
+  std::atomic<bool> ready{false};
   std::thread setter([&ready] {
     std::this_thread::sleep_for(20ms);
-    ready = true;
+    ready.store(true);
   });
-  const bool observed = waitFor([&ready] { return ready; }, 2.0);
+  const bool observed = waitFor([&ready] { return ready.load(); }, 2.0);
   setter.join();
   EXPECT_TRUE(observed);
 }
