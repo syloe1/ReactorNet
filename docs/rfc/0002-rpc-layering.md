@@ -4,7 +4,7 @@
 |---|---|
 | RFC 编号 | 0002 |
 | 标题 | RPC 分层、模块边界与线程模型 |
-| 状态 | Draft（待 review） |
+| 状态 | Draft（待 review；实现已成体系，#42/#43 已按本文档落地） |
 | 日期 | 2026-10-17 |
 | 里程碑 | RPC M0 · 设计 |
 | 对应 issue | #16 |
@@ -14,7 +14,7 @@
 
 本文档定死 RPC 层与网络层的边界：目录与构建目标、依赖方向、线程模型、错误分类。
 
-它**不定义任何 API 签名**，也**不决定序列化**。前者是 #29–#32 的事，后者是 #41 的事。本文档只回答一个问题的边界版本：**什么代码应该放在哪一层，以及它允许触碰哪些线程与状态。**
+它**不定义任何 API 签名**，也**不决定序列化**。前者是 #29–#32 的事，后者由 ADR-002（#41）决定并已在 #42/#43 落地。本文档只回答一个问题的边界版本：**什么代码应该放在哪一层，以及它允许触碰哪些线程与状态。**
 
 ---
 
@@ -26,7 +26,8 @@ ReactorNet 的 RPC 层是网络层的一个**消费者**，不是网络层的一
 用户代码 / example
         │
         ▼
-rpc/                 RpcServer · RpcClient · Codec · ServiceRegistry
+rpc/                 RpcServer · RpcClient · FrameReader · Codec
+                     Serializer (raw / JSON) · JsonValue · ServiceRegistry
         │            构建目标：libreactornet_rpc.a
         ▼
 include/Transport.h  TransportPtr：一条可靠有序的字节流（RFC-0003）
@@ -85,7 +86,7 @@ Linux：epoll · timerfd · eventfd · socket
 | 层 | 负责 | 不负责 |
 |---|---|---|
 | 用户代码 / example | 业务语义、调用时机 | 分帧、连接生命周期、线程调度 |
-| `rpc/` | 帧编解码、请求配对、服务注册与分发、超时与错误映射、客户端`Call` | 直接读写 fd、epoll 注册、accept/connect 状态机 |
+| `rpc/` | 帧编解码、payload 序列化（raw / JSON）、请求配对、服务注册与分发、超时与错误映射、客户端`Call` | 直接读写 fd、epoll 注册、accept/connect 状态机 |
 | `Transport` | 一条可靠有序双向字节流的抽象（RFC-0003） | 帧边界、请求语义、序列化 |
 | 核心网络层 | socket 生命周期、事件循环、定时器、缓冲、accept/connect | 任何 RPC 概念 |
 | Linux | epoll / timerfd / eventfd / socket | —— |
@@ -407,8 +408,9 @@ worker loop ──► FrameReader ──► Dispatcher ──► handler
 | 未知服务 | `UNKNOWN_SERVICE`（`0x07`） | **保持** | |
 | 未知方法 | `UNKNOWN_METHOD`（`0x08`） | **保持** | |
 | handler 抛异常 / 内部失败 | `INTERNAL_ERROR`（`0x09`） | **保持** | 异常在分发边界捕获 |
+| 未知 payload 格式（`serializer` id 不支持） | `UNSUPPORTED_SERIALIZER`（`0x0D`） | **保持** | 帧结构完好，只是 payload 格式未知（RFC-0001 §4.6） |
 | 应用自定义失败 | `0x80`–`0xFF` | **保持** | RPC 层不解释，透传给调用方 |
-| 响应 `status` 是 `0x0A`–`0x7F` 未定义值 | 对端发来的帧 | **保持** | RFC-0001 §8 第 3 条：按失败容忍 |
+| 响应 `status` 是 `0x0E`–`0x7F` 未定义值 | 对端发来的帧 | **保持** | RFC-0001 §8 第 3 条：按失败容忍 |
 | RESPONSE 的 `request_id` 本地没有 pending | 合法帧 | **保持** | RFC-0001 §8 第 7 条：丢弃，不是错误 |
 
 ### 8.3 服务端的判定顺序
@@ -470,7 +472,7 @@ worker loop ──► FrameReader ──► Dispatcher ──► handler
 |---|---|
 | #27 帧头编解码 | 代码放 `rpc/`；常量与 RFC-0001 同源；核心库零改动 |
 | #28 FrameReader | 每连接一份状态，只在连接 IO 线程访问；不依赖单次 `read` 边界 |
-| #29 信封与 Codec | payload 对协议层不透明；Serializer 的决策留给 #41 |
+| #29 信封与 Codec | payload 对协议层不透明；#42 把 Serializer 拆成独立接口，帧头承载它的 id |
 | #30 ServiceRegistry | §7.3 的冻结与发布规则；`start()` 后只读、查找无锁 |
 | #31 RpcServer | handler 在连接 IO 线程执行；§7.4 的禁止阻塞；异常边界 |
 | #32 RpcClient | 自持 `EventLoopThread`；`nextId_`/`pendings_` 仅 loop 线程 |
@@ -481,7 +483,7 @@ worker loop ──► FrameReader ──► Dispatcher ──► handler
 | #38 超时与 deadline | deadline 是本地行为；到期只失败该 call，不关连接 |
 | #39 错误模型 | §8 的三类划分、映射表与判定顺序 |
 | #40 畸形帧加固 | §8.3 的判定顺序；校验先于分配 |
-| #41–#43 序列化 | 只在 `rpc/`；第三方依赖只挂 `reactornet_rpc`；核心库零依赖 |
+| #41–#43 序列化（已落地） | 只在 `rpc/`；`JsonValue` / `JsonWriter` / `JsonParser` / `JsonSerializer` 不进入核心库；第三方依赖只挂 `reactornet_rpc`；未知 serializer id → `0x0D` 且连接保留（RFC-0001） |
 | #44–#46 类型化注册 / Stub | 类型擦除发生在 `rpc/` 的注册边界，见 ADR-001；核心库仍不认识 RPC |
 | #47 文档 | README / Learn 的 RPC 章节必须引用本 RFC 与 RFC-0001 |
 
@@ -495,7 +497,7 @@ worker loop ──► FrameReader ──► Dispatcher ──► handler
 
 - **不写代码。** 没有 `.h`、没有 `.cpp`、没有 CMake 改动。
 - **不定义具体 API 签名。** 不规定 `RpcServer::registerService` 的参数形态，不规定 `Call` 返回 `future` 还是回调——这些是 #29–#32 的实现决定，只要满足本文档的线程与错误契约。
-- **不决定序列化。** JSON / protobuf / 自研二进制由 ADR-002（#41）决定。
+- **不决定序列化。** JSON / protobuf / 自研二进制由 ADR-002（#41）决定；本文档只要求它留在 `rpc/`。
 - **不设计服务发现、负载均衡、重试、连接池。** 这些都在 M6 之后，本文档不预留 API。
 - **不引入线程池。** handler 的阻塞问题是 M8 的事；本文档只明确「现在不能阻塞」以及为什么。
 - **不改变任何现有网络层语义。** 见 §6.4。
@@ -528,7 +530,7 @@ worker loop ──► FrameReader ──► Dispatcher ──► handler
 | 3 | 同一个 service 对象被多个 IO 线程并发调用 | 本文档把线程安全责任交给用户；是否改为「每线程一个实例」需要真实压测数据，属 M8 |
 | 4 | 服务端如何执行「handler 超时」 | 单 loop 内无法抢占正在运行的 handler（§7.4）。真要支持，需要线程池 + 协作式取消，属 M8 |
 | 5 | 同步 `Call` 是否应该完全禁止 | 本文档允许业务线程同步等待、禁止 loop 线程同步等待；是否最终只保留异步形态，等 #35/#36 的使用反馈 |
-| 6 | 跨进程/多语言互通 | 协议层已独立（RFC-0001），但序列化与 IDL 未定。不在本路线图内 |
+| 6 | 跨进程/多语言互通 | 协议层已独立（RFC-0001），序列化也已定为 raw + JSON（ADR-002）；IDL 与类型化映射（#44/#46/#48）仍未定。不在本路线图内 |
 
 ---
 
@@ -547,3 +549,4 @@ worker loop ──► FrameReader ──► Dispatcher ──► handler
 | 版本 | 日期 | 说明 |
 |---|---|---|
 | v0.1 | 2026-10-17 | 初稿：分层图、`rpc/` 目录与构建目标、五条边界规则及 CI grep、客户端/服务端线程模型、三类错误模型与 RFC-0001 `status` 映射、6 条开放问题 |
+| v0.2 | 2026-10-18 | #42/#43 落地：分层图补充 FrameReader / Serializer / JsonValue；明确 payload 序列化属于 `rpc/`；更新 #41–#43 的下游约束与开放问题状态 |

@@ -2,12 +2,14 @@
 
 ## 这是什么？
 
-ReactorNet 是一个 **约 2000 行 C++17** 的网络库，实现了经典的 **Reactor 模式**（事件驱动 + 非阻塞 I/O）。它是 [muduo](https://github.com/chenshuo/muduo) 网络库的教学级精简版。**零第三方依赖**，只依赖 Linux 系统调用（epoll、timerfd、eventfd）和 C++ 标准库。
+ReactorNet 是一个 **核心网络层约 2000 行 C++17** 的项目，实现了经典的 **Reactor 模式**（事件驱动 + 非阻塞 I/O），并在其上构建了一个小型 RPC 层（分帧、请求配对、超时、服务注册、raw/JSON 两种 payload 序列化）。它是 [muduo](https://github.com/chenshuo/muduo) 网络库的教学级精简版。**零第三方依赖**，只依赖 Linux 系统调用（epoll、timerfd、eventfd）和 C++ 标准库——JSON writer/parser 也是手写的。
 
 读完这个项目，你将理解：
 - Reactor / 多 Reactor 网络模型的核心原理
 - Linux epoll 非阻塞 I/O 编程
 - C++ RAII、智能指针、线程安全在实际项目中的应用
+- 二进制协议分帧、请求 id 配对、超时与错误分类
+- 「帧层 / 信封 / payload 序列化」如何分层，以及 JSON 的转义、UTF-8 与递归深度处理
 
 ---
 
@@ -23,7 +25,7 @@ ReactorNet 是一个 **约 2000 行 C++17** 的网络库，实现了经典的 **
 
 ---
 
-## 学习路线（5 个阶段，建议顺序阅读）
+## 学习路线（6 个阶段，建议顺序阅读）
 
 ```
 第 1 层：基础设施
@@ -39,8 +41,14 @@ ReactorNet 是一个 **约 2000 行 C++17** 的网络库，实现了经典的 **
   Buffer → TcpConnection → Acceptor → TcpServer → EventLoopThread
               ↓
 第 5 层：应用层
-  HttpRequest → HttpResponse → main.cpp（整合示例）
+  HttpRequest → HttpResponse → example/http_server.cpp
+              ↓
+第 6 层：RPC 层
+  protocol → FrameReader → Codec → Serializer → JsonValue
+  → JsonWriter / JsonParser → ServiceRegistry → RpcServer / RpcClient
 ```
+
+前 5 层是网络库本身；第 6 层是它的第一个真实消费者。先读第 6 层，你会更清楚第 1–4 层为什么要设计成现在这样（例如 `Transport`、`EventLoop::runAfter`、`Buffer` 的 prependable 空间）。
 
 ---
 
@@ -224,7 +232,7 @@ loop.cancelTimer(heartbeat);
 
 ---
 
-## 第 4 层：TCP 网络层（5 个文件）
+## 第 4 层：TCP 网络层（7 个文件）
 
 ### 4.1 `include/Buffer.h` + `src/Buffer.cpp`
 **20 分钟** — 非连续的读写缓冲区。三区设计：
@@ -375,9 +383,16 @@ class EventLoopThread {
 - `removeConnection()` 为什么要绕到 baseLoop 去执行？
 - 如果用 4 个线程，一个客户端发送大量数据，其他客户端会受影响吗？
 
+### 4.6 `include/Connector.h` + `TcpClient.h`（客户端侧）
+**20 分钟** — 服务端有 `Acceptor`，客户端对应的角色是 `Connector`：非阻塞 `connect` + 在 `Channel` 上等 `EPOLLOUT`，处理 `EINPROGRESS` 与失败重试。`TcpClient` 把它和 `TcpConnection` 的生命周期包在一起，提供 `connect()` / `disconnect()` 与连接回调。
+
+**关键点**：连接建立前，`TcpConnection` 还不存在；`TcpClient` 负责在 `Connector` 成功回调里创建它，并保证这些回调都在自己的 loop 线程执行。`RpcClient` 正是复用这套客户端设施。
+
+**思考题**：`connect()` 返回 `EINPROGRESS` 时，为什么要等 `EPOLLOUT`？`SO_ERROR` 在这里起什么作用？
+
 ---
 
-## 第 5 层：应用层（3 个文件）
+## 第 5 层：应用层（HTTP 示例）
 
 ### 5.1 `include/HttpRequest.h` + `src/HttpRequest.cpp`
 **15 分钟** — 极简的 HTTP/1.0 请求解析器。
@@ -394,8 +409,8 @@ class EventLoopThread {
 - 序列化为 Buffer
 - 默认 keep-alive，`closeConnection_ = true` 时才发 `Connection: close`
 
-### 5.3 `src/main.cpp`
-**20 分钟** — 把所有东西串起来。两个 Demo 服务器：
+### 5.3 `example/echo_server.cpp` + `example/http_server.cpp`
+**20 分钟** — 把网络层组件串起来。两个独立可执行文件：
 
 **EchoServer**：
 ```cpp
@@ -405,7 +420,7 @@ void onMessage(const TcpConnectionPtr& conn, Buffer* buf) {
 }
 ```
 
-**HttpServer**（在 main.cpp 里内联实现）：
+**HttpServer**：
 ```cpp
 // 收到 HTTP 请求 → 读文件 → 构建 HTTP/1.1 响应 → 发送（keep-alive 不断连）
 void onMessage(const TcpConnectionPtr& conn, Buffer* buf) {
@@ -421,13 +436,129 @@ void onMessage(const TcpConnectionPtr& conn, Buffer* buf) {
         buf->retrieve((end + 4) - buf->peek());
 
         HttpResponse resp(false);        // false = keep-alive，不断连
-        resp.setBody(readFile("www" + req.path()));
+        resp.setBody(readFile(docRoot + req.path()));
         Buffer respBuf;
         resp.appendToBuffer(&respBuf);
         conn->send(respBuf.retrieveAllAsString());  // 不 shutdown，连接保持
     }
 }
 ```
+
+这两个示例只依赖核心库；`example/rpc_echo_server.cpp` 与
+`example/rpc_echo_client.cpp` 依赖 `reactornet_rpc`，在第 6 层展开。
+
+---
+
+## 第 6 层：RPC 层（`rpc/`）
+
+**约 2 小时** — RPC 层是核心网络库的第一个消费者：它只拿到 `TransportPtr`，不直接碰 socket/epoll。建议按下面的顺序读。
+
+### 6.1 阅读顺序
+
+```
+protocol.h / protocol.cpp        16 字节帧头 + status 枚举
+        ↓
+frame_reader.h / .cpp            TCP 字节流 → 完整帧（每连接一份状态）
+        ↓
+codec.h / raw_codec.cpp          帧 body 的信封：service/method + payload
+        ↓
+serializer.h                      payload ↔ JsonValue 的接口
+        ├── raw_serializer.cpp    id 0：任意字节，v0.1 默认
+        └── json_serializer.cpp   id 1：JSON 文本
+                ↓
+json_value.h                     通用对象模型
+json_writer.h / json_parser.h    JsonValue ↔ JSON 文本
+        ↓
+service_registry.h               名字 → handler 表（start() 后只读）
+        ↓
+rpc_server.h / rpc_client.h      服务端分发、客户端配对/超时/错误映射
+```
+
+### 6.2 帧格式：16 字节帧头
+
+```
+偏移  0    2    3    4    5      6         7        8      12     16
+     magic ver type flags status serializer reserved req_id body_len body...
+      2B   1B   1B   1B    1B      1B        1B       4B     4B    变长
+```
+
+- `magic = "RN"`，`version = 1`，`type` 区分 REQUEST/RESPONSE；
+- `request_id` 把响应配回请求，`0` 非法；
+- `body_len` 是长度前缀；解码器必须**先校验上限再分配内存**（RFC-0001 §4.4）；
+- **偏移 6 是 `serializer`**：`0` = raw、`1` = JSON。它原本是保留字节，`0` 恰好延续旧行为，所以没有升 `version`。响应必须回显请求的值；客户端发现不一致会关闭连接，而不是把错误格式的 payload 交给业务。
+
+body 布局（`Codec` 负责）：
+
+```
+REQUEST   [u16 svc_len][service][u16 method_len][method][payload]
+RESPONSE  [payload]                     // status 在帧头，不在 body
+```
+
+### 6.3 Codec 与 Serializer 的分工（#42）
+
+这是 RPC 层最重要的设计点：
+
+| 组件 | 负责 | 不负责 |
+|---|---|---|
+| `FrameReader` | 字节流 → 完整帧、长度上限 | body 里的名字与 payload 含义 |
+| `Codec` | 帧 body 的信封：service/method 的位置 | payload 是 JSON 还是别的 |
+| `Serializer` | payload 字节 ↔ `JsonValue` | 帧头、长度前缀、连接 |
+
+好处：换 payload 格式不需要改帧布局；换帧层也不需要改 JSON。`Serializer` 只有两个上线标识：`id()` 写进帧头，`name()`（`"raw"` / `"json"`）只给日志和配置用。
+
+### 6.4 JSON 实现（#43）
+
+`JsonValue` 是一个 tagged struct，不是 `std::variant`：
+
+```cpp
+enum class Type { kNull, kBool, kNumber, kString, kArray, kObject };
+using Array = std::vector<JsonValue>;
+using Object = std::vector<std::pair<std::string, JsonValue>>;  // 保留插入顺序
+```
+
+- 整数用 `int64_t`、浮点用 `double` 分开存，`isInteger()` 区分，避免 `42` round-trip 成 `42.0`；
+- 对象是 `vector<pair>`，编码顺序确定、可测试；代价是查找 O(n)（payload 很小）；
+- `JsonWriter`：`std::to_chars` 输出最短 round-trip 数字；非有限值拒绝；转义引号、反斜杠与控制字符；非法 UTF-8 拒绝；
+- `JsonParser`：递归下降，严格 RFC 8259——只认 4 个空白字符、拒绝尾随垃圾、处理 `\uXXXX`/代理对/`\u0000`、校验 UTF-8、数字溢出 `int64` 时退回 `double`；
+- **深度上限默认 64，在递归前检查**，所以 `[[[[...` 的恶意输入不会打爆栈；
+- 失败时输出参数保持不变，调用方可以安全地丢弃整条消息。
+
+`JsonSerializer` 只是把 `JsonWriter` / `JsonParser` 套进 `Serializer` 接口，并检查 `kMaxBodyLen`。
+
+### 6.5 服务端与客户端
+
+**服务端**（`RpcServer`）：
+
+```
+TcpServer 收到字节
+  → FrameReader 切帧
+  → 帧头校验（magic/version/type/status/serializer/body_len）
+  → Codec 解出 service/method/payload
+  → ServiceRegistry 查表
+  → handler(payload) 在连接所属 IO 线程执行
+  → Codec 组 RESPONSE，Serializer id 回显
+```
+
+- 注册表在 `start()` 后只读，多 IO 线程并发查表不需要锁；
+- handler 抛出的异常在分发边界被捕获，映射成 `INTERNAL_ERROR`，连接保持可用；
+- 不认识的 `serializer` id 回 `UNSUPPORTED_SERIALIZER`（`0x0D`），连接继续可用。
+
+**客户端**（`RpcClient`）：
+
+- `Call()` 阻塞，**不能在 loop 线程调用**（会死锁）；`AsyncCall()`/`CallAsync()` 可从任意线程调用；
+- 在途请求放在 `pendings_`，只在客户端自己的 loop 线程访问，因此不需要锁；
+- `Call(request, timeoutSeconds)` 给每个请求挂一个定时器，到期返回 `kTimeout`，连接保留；迟到响应按已超时 id 丢弃；
+- 错误统一成 `Response{status, payload}`：服务端状态原样透传，传输问题 → `kConnectionClosed`，发送前参数非法 → `kBadRequest`，超时 → `kTimeout`。
+
+### 6.6 对照示例读
+
+`example/rpc_echo_server.cpp` 注册 `Echo.Echo`，用 `JsonParser` 解析请求、`JsonWriter` 重新编码；`example/rpc_echo_client.cpp` 构造 `{"message": ..., "client": ...}`，两端都 `setSerializerId(kSerializerJson)`。跑起来后抓包或打印 payload，可以直接看到帧头与 JSON 文本。
+
+**思考题**：
+- 为什么 `Codec` 不应该解析 JSON？如果让它解析，换 protobuf 时要改哪些代码？
+- 为什么 `serializer` 放在帧头，而不是 body 的第一个字节？
+- `JsonParser` 为什么必须在递归**之前**检查深度？在递归之后检查会怎样？
+- 客户端为什么能安全地让多个线程同时调用 `Call()`，而 `pendings_` 却不用加锁？
 
 ---
 
@@ -437,13 +568,19 @@ void onMessage(const TcpConnectionPtr& conn, Buffer* buf) {
 
 ### 练习 1：编译运行（10 分钟）
 ```bash
-mkdir -p build && cd build
-cmake .. && make -j$(nproc)
-./reactor_demo              # 默认 echo server
+cmake -B build -DBUILD_TESTING=ON
+cmake --build build -j"$(nproc)"
+cd build
+
+./echo_server               # 默认 echo server（端口 8080）
 # 另开终端：echo "hello" | nc localhost 8080
-./reactor_demo http         # HTTP server
+
+./http_server 8080 ../www   # HTTP server
 # 浏览器访问 http://localhost:8080
-./reactor_demo http 4       # 4 线程 HTTP server
+./http_server 8080 ../www 4 # 4 线程 HTTP server
+
+./rpc_echo_server 9000      # RPC echo server（JSON payload）
+# 另开终端：./rpc_echo_client 9000 "hello"
 ```
 
 ### 练习 2：加日志（20 分钟）
@@ -470,6 +607,12 @@ cmake .. && make -j$(nproc)
 
 ### 练习 8：实现基于 Token 的简单速率限制
 给每个客户端 IP 限制每秒最多 N 个请求。超过限制则返回 HTTP 429 Too Many Requests。
+
+### 练习 9：给 RPC Echo 增加一个方法（30 分钟）
+在 `rpc_echo_server.cpp` 注册 `Echo.Upper`，把请求 JSON 里的 `message` 转成大写后返回。客户端分别调用 `Echo.Echo` 与 `Echo.Upper`，观察 `request_id` 如何把交错返回的响应配回各自的调用。
+
+### 练习 10：实现第二个 Serializer（60 分钟）
+实现一个 `LineSerializer`（id 自己选一个未使用的值，比如 `2`）：把 `JsonValue` 字符串编码成「一行文本 + `\n`」。它只处理字符串值，用来体会 `Serializer` 接口如何与帧层解耦。然后在客户端/服务端 `setSerializerId`，验证不匹配时的失败路径。
 
 ---
 
@@ -508,14 +651,12 @@ cmake .. && make -j$(nproc)
 | muduo 有，本项目没有 | 说明 |
 |---------------------|------|
 | **Logger 日志系统** | muduo 有完整的异步日志库 |
-| **Connector** | 主动发起 TCP 连接的客户端类 |
-| **TcpClient** | 封装了 Connector 的完整客户端 |
-| **线程池** | 固定大小的通用线程池 |
+| **线程池** | 固定大小的通用线程池；本项目只有 one-loop-per-thread |
 | **定时器队列优化** | muduo 用 4 个桶的 timing wheel 替代了简单最小堆 |
 | **Buffer 设计** | muduo 的 Buffer 更复杂（支持 prepend 动态空间） |
-| **单元测试** | muduo 有完整的 Google Test 单元测试 |
-| **SIGPIPE 处理** | muduo 在全局忽略 SIGPIPE 信号 |
 | **EPOLLET 边缘触发** | 本项目只用水平触发（LT），muduo 支持 ET |
+| **protobuf RPC** | 本项目提供手写 JSON 与 raw 两种 Serializer；protobuf 只是 ADR-002 中的可选插件方向 |
+| **完整的 IDL / codegen** | 类型化注册与 stub 是 #44–#48 的路线图，当前注册 API 仍是「名字 + 字节」 |
 
 ---
 
@@ -532,6 +673,15 @@ A: 因为 write() 系统调用需要在正确的 epoll 上注册 EPOLLOUT 事件
 
 **Q: Buffer 里的 prependable 8 字节是干什么的？**
 A: 为协议头预留空间。比如要在已有数据前面加一个长度头（length-prefixed framing），可以直接在 prependable 区域写入而不需要移动数据。这 8 字节足够放下一个 64 位整数。
+
+**Q: 为什么默认 serializer 是 raw，而不是 JSON？**
+A: 兼容性。`serializer` 字节原来是保留字节，pre-#42 的发送方在那里写 `0`；把 `0` 定义为 raw，旧对端的帧就仍然合法。JSON 是 id `1`，example 通过 `setSerializerId(kSerializerJson)` 显式启用。
+
+**Q: 两端 serializer 不一致会怎样？**
+A: 服务端收到不认识的 id 回 `UNSUPPORTED_SERIALIZER`（`0x0D`），连接保留；客户端收到与请求不一致的响应 id 则关闭连接，让所有在途调用失败。两种都是「明确失败」，不会把错误格式的 payload 当成功返回。
+
+**Q: 为什么 JSON 解析器要限制深度？**
+A: 递归下降解析器每进入一层数组/对象就消耗栈帧。没有上限时，一个 `[[[[[...` 请求就能打爆线程栈。默认上限 64，并且在递归**之前**检查。
 
 **Q: 为什么不用 Boost.Asio？**
 A: 这是一个**教学项目**。使用 Boost.Asio 就看不到底层实现了。手写 epoll 让你真正理解 Reactor 模式。
@@ -564,8 +714,16 @@ A: 这是一个**教学项目**。使用 Boost.Asio 就看不到底层实现了�
 - [ ] TcpServer 如何把新连接分发给工作线程？
 - [ ] 关闭一个连接时，为什么清理要回到 baseLoop 执行？
 
+### 第 6 层（RPC）— 建议掌握
+- [ ] `FrameReader`、`Codec`、`Serializer` 三者的边界分别在哪里？
+- [ ] `serializer` 为什么放在帧头？响应为什么要回显它？
+- [ ] `JsonValue` 为什么把整数和浮点分开存？对象为什么用 `vector` 而不是 `map`？
+- [ ] 客户端超时后，迟到的响应如何被识别并丢弃？
+- [ ] 服务端 handler 抛异常时，连接为什么还能继续使用？
+
 ### 综合理解
 - [ ] 画出多 Reactor 模式下一帧数据的完整流向（从网卡到应用层回调）
+- [ ] 画出一次 JSON RPC 调用从 `RpcClient::Call()` 到 handler 返回的完整路径
 - [ ] 如果让你用其他语言（Rust/Go/Python）实现同样的架构，你会怎么设计？
 
 ---
