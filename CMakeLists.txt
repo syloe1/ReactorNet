@@ -90,6 +90,12 @@ target_link_libraries(rpc_echo_server PRIVATE reactornet_rpc)
 add_executable(rpc_echo_client example/rpc_echo_client.cpp)
 target_link_libraries(rpc_echo_client PRIVATE reactornet_rpc)
 
+# Serialization microbenchmark for ADR-002 (#41). Standalone on purpose: it is
+# not part of the library or the test suite, and its reference encoders have no
+# third-party dependencies. See docs/adr/0002-serialization.md for the command.
+add_executable(serialization_bench bench/serialization_bench.cpp)
+target_link_libraries(serialization_bench PRIVATE reactornet)
+
 # Install
 install(TARGETS echo_server http_server rpc_echo_server rpc_echo_client
         DESTINATION bin)
