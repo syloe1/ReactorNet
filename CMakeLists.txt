@@ -82,8 +82,17 @@ target_link_libraries(echo_server PRIVATE reactornet)
 # Http Server example
 add_executable(http_server example/http_server.cpp)
 target_link_libraries(http_server PRIVATE reactornet)
+
+# RPC echo example: server and blocking client
+add_executable(rpc_echo_server example/rpc_echo_server.cpp)
+target_link_libraries(rpc_echo_server PRIVATE reactornet_rpc)
+
+add_executable(rpc_echo_client example/rpc_echo_client.cpp)
+target_link_libraries(rpc_echo_client PRIVATE reactornet_rpc)
+
 # Install
-install(TARGETS echo_server http_server DESTINATION bin)
+install(TARGETS echo_server http_server rpc_echo_server rpc_echo_client
+        DESTINATION bin)
 
 # --- Tests -----------------------------------------------------------------
 # GoogleTest is a dev-only dependency: nothing under tests/ is ever linked into

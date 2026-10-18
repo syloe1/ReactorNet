@@ -82,6 +82,7 @@ ownership model and thread contract.
 | `TcpServer` | Multi-reactor server with accept loop and connection management |
 | `TcpClient` | Client entry point: `Connector` handshake + `TcpConnection` lifecycle |
 | `RpcServer` | Server-side RPC chain: `TcpServer` + `FrameReader` + `Codec` + `ServiceRegistry` ([RFC-0001](docs/rfc/0001-rpc-protocol.md)) |
+| `RpcClient` | Blocking client with one in-flight request: `TcpClient` + `FrameReader` + `Codec` |
 | `Acceptor` | Listening socket handler, runs in base reactor |
 | `Buffer` | Non-contiguous read/write buffer with prependable space |
 | `Socket` | RAII wrapper around socket fd |
@@ -141,6 +142,19 @@ GitHub applies the file automatically.
 # Test with netcat
 echo "Hello, Reactor!" | nc localhost 8080
 ```
+
+### RPC Echo
+
+```bash
+# Terminal 1: echo service on port 9000 (port 0 picks a free one)
+./rpc_echo_server 9000
+
+# Terminal 2: one blocking call on the "Echo.Echo" method
+./rpc_echo_client 9000 "hello rpc"
+# status=0 payload="hello rpc"
+```
+
+The client allows one in-flight request in v0.1 and has no response timeout.
 
 ### HTTP Server
 
