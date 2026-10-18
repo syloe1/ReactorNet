@@ -1,6 +1,9 @@
 #include "EventLoop.h"
 #include "EventLoopThread.h"
 #include "InetAddress.h"
+#include "rpc/json_serializer.h"
+#include "rpc/json_value.h"
+#include "rpc/protocol.h"
 #include "rpc/rpc_client.h"
 
 #include <cstdint>
@@ -30,6 +33,19 @@ int main(int argc, char *argv[]) {
     payload = argv[2];
   }
 
+  // Build the payload before touching the loop: a serialization failure has
+  // no connection to clean up.
+  JsonValue requestValue = JsonValue::makeObject();
+  requestValue["message"] = JsonValue(payload);
+  requestValue["client"] = JsonValue("rpc_echo_client");
+
+  JsonSerializer json;
+  std::string encoded;
+  if (!json.encode(requestValue, &encoded)) {
+    std::cerr << "failed to encode the JSON request" << std::endl;
+    return 1;
+  }
+
   EventLoopThread loopThread;
   EventLoop *loop = loopThread.startLoop();
 
@@ -37,11 +53,24 @@ int main(int argc, char *argv[]) {
   // therefore requires a copy-constructible capture for the teardown task.
   auto client = std::make_shared<RpcClient>(loop,
                                             InetAddress(port, "127.0.0.1"));
+  client->setSerializerId(kSerializerJson); // must match the server
   client->connect(); // returns once the handshake completes or fails
 
-  const Response response = client->Call(Request{"Echo", "Echo", payload});
+  const Response response = client->Call(Request{"Echo", "Echo", encoded});
   std::cout << "status=" << static_cast<int>(response.status)
-            << " payload=\"" << response.payload << "\"" << std::endl;
+            << " payload=" << response.payload << std::endl;
+
+  if (response.status == StatusCode::kOk) {
+    JsonValue decoded;
+    if (!json.decode(response.payload, &decoded)) {
+      std::cerr << "server returned a payload that is not JSON" << std::endl;
+    } else {
+      const JsonValue *message = decoded.find("message");
+      if (message != nullptr && message->isString()) {
+        std::cout << "message=\"" << message->asString() << "\"" << std::endl;
+      }
+    }
+  }
 
   // TcpClient is loop-thread owned, so destroy the client there and wait for
   // the task before the EventLoopThread goes away.

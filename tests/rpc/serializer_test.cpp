@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "rpc/json_serializer.h"
 #include "rpc/json_value.h"
 #include "rpc/protocol.h"
 #include "rpc/rpc_client.h"
@@ -142,6 +143,31 @@ TEST_F(SerializerE2E, MatchingNonDefaultIdRoundTrips) {
   EXPECT_EQ(response.status, StatusCode::kOk);
   EXPECT_EQ(response.payload, "still opaque to the codec");
   EXPECT_EQ(response.serializerId, kSerializerJson);
+}
+
+TEST_F(SerializerE2E, JsonPayloadRoundTripsThroughTheEchoServer) {
+  ASSERT_TRUE(fixture_.runOnLoop(
+      [this] { fixture_.server()->setSerializerId(kSerializerJson); }));
+  connectClient(kSerializerJson);
+
+  JsonSerializer json;
+  JsonValue request = JsonValue::makeObject();
+  request["message"] = JsonValue("hello");
+  request["count"] = JsonValue::makeInteger(3);
+  request["tags"] = JsonValue::makeArray();
+  request["tags"].asArray().push_back(JsonValue("a"));
+
+  std::string payload;
+  ASSERT_TRUE(json.encode(request, &payload));
+
+  const Response response =
+      client_->Call(Request{"Echo", "Echo", payload});
+  ASSERT_EQ(response.status, StatusCode::kOk);
+  EXPECT_EQ(response.serializerId, kSerializerJson);
+
+  JsonValue decoded;
+  ASSERT_TRUE(json.decode(response.payload, &decoded));
+  EXPECT_EQ(decoded, request);
 }
 
 TEST_F(SerializerE2E, ServerRejectsAnUnsupportedIdAndStaysUsable) {

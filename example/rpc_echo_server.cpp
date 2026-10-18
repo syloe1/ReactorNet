@@ -1,5 +1,8 @@
 #include "EventLoop.h"
 #include "InetAddress.h"
+#include "rpc/json_parser.h"
+#include "rpc/json_writer.h"
+#include "rpc/protocol.h"
 #include "rpc/rpc_server.h"
 
 #include <cstdint>
@@ -26,9 +29,24 @@ int main(int argc, char *argv[]) {
 
   EventLoop loop;
   RpcServer server(&loop, InetAddress(port, "0.0.0.0"));
+
+  // The reference payload format (#43): parse the JSON request, then encode it
+  // again. Echoing the bytes would prove less; this path exercises both halves
+  // of the serializer. A malformed payload still gets an ordinary response so
+  // a human with nc can see what went wrong.
   server.registry()->registerMethod(
-      "Echo", "Echo",
-      [](std::string_view payload) { return std::string(payload); });
+      "Echo", "Echo", [](std::string_view payload) {
+        JsonValue request;
+        if (!JsonParser().parse(payload, &request)) {
+          return std::string(R"({"error":"malformed json"})");
+        }
+        std::string encoded;
+        if (!JsonWriter().write(request, &encoded)) {
+          return std::string(R"({"error":"unencodable value"})");
+        }
+        return encoded;
+      });
+  server.setSerializerId(kSerializerJson);
   server.start();
 
   // listenAddress() is only valid on this (the base loop) thread, after
