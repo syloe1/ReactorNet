@@ -5,6 +5,7 @@ add_executable(reactornet_rpc_tests
     frame_reader_test.cpp
     codec_test.cpp
     serializer_test.cpp
+    json_writer_test.cpp
     registry_test.cpp
     rpc_fixture.cpp
     rpc_fixture_test.cpp
