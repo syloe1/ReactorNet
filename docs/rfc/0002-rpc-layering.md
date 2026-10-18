@@ -298,6 +298,12 @@ ReactorNet 是 one-loop-per-thread。由此推出三条铁律：
 
 「在 loop 线程上做同步等待」是这套模型里最容易犯的错，也是面试里最值得讲的一条：**不是所有阻塞都错，阻塞 loop 线程才错。**
 
+**实现与回归（#34 / #36）：** 以上契约已落实到 `RpcClient`：请求经
+`runInLoop` 进入 loop 线程后分配 id、登记 pending 表并发送；所有可变状态只在
+loop 线程访问，因此无需加锁。`ConcurrentCallTest` 用 8 个业务线程 × 50 次调用
+覆盖共享客户端路径；debug 构建下另有死亡测试，验证 loop 线程上的同步 `Call()`
+必然触发断言，而不是悄悄死锁。
+
 ### 7.3 服务端：handler 跑在连接所属的 IO 线程
 
 ```
