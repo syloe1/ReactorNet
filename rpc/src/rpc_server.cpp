@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <exception>
 #include <functional>
 #include <iostream>
 #include <string>
@@ -147,8 +148,19 @@ void RpcServer::handleRequest(const TransportPtr &conn,
     return;
   }
 
+  // A handler runs arbitrary user code — possibly not written by us, possibly
+  // throwing. Letting an exception escape would unwind through the IO loop and
+  // terminate the process. Catch it at the dispatch boundary and turn it into
+  // an ordinary INTERNAL_ERROR response: the frame is well formed, so the
+  // connection stays usable and other clients are unaffected (#39).
   Response response;
-  registry_.dispatch(request, &response);
+  try {
+    registry_.dispatch(request, &response);
+  } catch (const std::exception &) {
+    response = Response{StatusCode::kInternalError, ""};
+  } catch (...) {
+    response = Response{StatusCode::kInternalError, ""};
+  }
   sendResponse(conn, header.requestId, response);
 }
 

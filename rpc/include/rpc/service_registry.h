@@ -42,8 +42,9 @@ public:
   // On success sets resp->status = kOk and resp->payload to the handler's
   // return value. On a miss returns false and sets resp->status to
   // kUnknownService or kUnknownMethod (RFC-0001 §4.6), clearing
-  // resp->payload. Exceptions from handlers propagate: mapping them to
-  // INTERNAL_ERROR is #39.
+  // resp->payload. Exceptions from handlers are not caught here; RpcServer's
+  // dispatch boundary converts them to INTERNAL_ERROR responses so one faulty
+  // handler cannot terminate the loop (#39).
   bool dispatch(const Request &req, Response *resp) const;
 
   // Number of registered service+method pairs.

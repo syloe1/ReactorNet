@@ -69,14 +69,23 @@ namespace reactornet::rpc {
 // (kMaxRememberedTimeouts). A response carrying such an id is silently
 // discarded — it is late, not a protocol violation. Any other unknown id is
 // still a protocol-level fault: the two ends no longer agree about the stream,
-// so the connection is closed and every pending call fails with kInternalError
-// (RFC-0001; #34). Ids in the remembered set are not reused, so a late response
-// can never be delivered to an unrelated call.
+// so the connection is closed and every pending call fails with
+// kConnectionClosed (RFC-0001; #34). Ids in the remembered set are not reused,
+// so a late response can never be delivered to an unrelated call.
 //
-// Failure semantics before #39: transport problems (not connected, peer
-// closed, malformed response) surface as Response{status = kInternalError,
-// payload = ""} rather than an exception or a hang. Application-level misses
-// still carry the server's own status (kUnknownService / kUnknownMethod).
+// Failure semantics (#39): every failure is a Response with an empty payload
+// and a status that says whose fault it was —
+//   - server answers: the server's own status (kUnknownService,
+//     kUnknownMethod, kInternalError, ...) is passed through unchanged;
+//   - transport: no connection, peer closed, or malformed response stream →
+//     kConnectionClosed (the request may never have reached the server);
+//   - caller: the request was rejected before sending, e.g. an empty service
+//     or method name or an over-limit body → kBadRequest (the connection is
+//     untouched);
+//   - deadline: kTimeout (#38).
+// No failure path throws or hangs. A handler that throws on the server is
+// caught there and arrives as kInternalError; the server and the connection
+// survive it.
 class RpcClient : noncopyable {
 public:
   // Always invoked on the loop thread. See the threading contract above.
@@ -88,20 +97,21 @@ public:
   // Starts one connection attempt and blocks until the handshake completes or
   // fails. The loop must already be running (e.g. an EventLoopThread).
   // A no-op when already connected. Failure is not thrown: a later Call()
-  // reports kInternalError. A client is single-session: once a successful
+  // reports kConnectionClosed. A client is single-session: once a successful
   // connection has ended, calling connect() again asserts rather than waiting
   // for a handshake TcpClient will never start.
   void connect();
 
   // Orderly close: pending output is flushed, then the write side is shut
-  // down. Outstanding calls fail with kInternalError; there is no reconnect.
+  // down. Outstanding calls fail with kConnectionClosed; there is no
+  // reconnect.
   void disconnect();
 
   // Sends one request and blocks until its response arrives or the connection
   // fails. Must be called from a thread other than the loop thread; any
   // number of threads may call it concurrently. An invalid Request (empty
-  // service/method, body over the protocol limit) and a disconnected client
-  // both return kInternalError.
+  // service/method, body over the protocol limit) returns kBadRequest; a
+  // disconnected or never-connected client returns kConnectionClosed.
   Response Call(const Request &request);
 
   // Same as above but gives up after timeoutSeconds and returns kTimeout.
@@ -110,9 +120,9 @@ public:
 
   // Non-blocking form of Call(): posts the request and returns immediately.
   // The callback runs on the loop thread with the response, or with
-  // kInternalError if the call cannot be started (kTimeout on expiry).
-  // `callback` must not be empty. The client must stay alive until the
-  // callback has run.
+  // kConnectionClosed / kBadRequest if the call cannot be started (kTimeout
+  // on expiry). `callback` must not be empty. The client must stay alive
+  // until the callback has run.
   void AsyncCall(const Request &request, ResponseCallback callback);
 
   // Timeout variant of AsyncCall(); timeoutSeconds <= 0 means no deadline.
@@ -121,7 +131,8 @@ public:
 
   // Future form of AsyncCall(). The future must be waited on from a thread
   // other than the loop thread, and while the client is alive. Like Call(), a
-  // call that cannot be started yields kInternalError; expiry yields kTimeout.
+  // call that cannot be started yields kConnectionClosed or kBadRequest;
+  // expiry yields kTimeout.
   std::future<Response> CallAsync(const Request &request);
 
   // Timeout variant of CallAsync(); timeoutSeconds <= 0 means no deadline.
