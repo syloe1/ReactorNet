@@ -1,8 +1,7 @@
 #include <gtest/gtest.h>
 
-#include "EventLoop.h"
-#include "EventLoopThread.h"
-#include "rpc/rpc_server.h"
+#include "rpc/codec.h"
+#include "rpc_fixture.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -15,14 +14,12 @@
 #include <cerrno>
 #include <chrono>
 #include <cstring>
-#include <future>
-#include <memory>
 #include <string>
-#include <string_view>
 #include <thread>
 
 using namespace reactornet;
 using namespace reactornet::rpc;
+using namespace reactornet::rpc::testing;
 using namespace std::chrono_literals;
 
 // End-to-end tests for RpcServer (#31). The client is a raw socket on purpose:
@@ -163,63 +160,19 @@ bool recvFrame(ClientSocket *client, MessageHeader *header, std::string *body,
 
 class RpcServerTest : public ::testing::Test {
 protected:
+  // The fixture starts the echo server on port 0 and tears it down on the
+  // loop thread; a fatal failure here skips the test body.
   void SetUp() override {
-    baseThread_ = std::make_unique<EventLoopThread>();
-    baseLoop_ = baseThread_->startLoop();
+    ASSERT_TRUE(fixture_.started()) << fixture_.error();
   }
 
-  void TearDown() override {
-    if (server_) {
-      runOnBaseLoopAndWait([this] { server_.reset(); });
-    }
-    baseThread_.reset(); // quits the base loop and joins its thread
-  }
-
-  // Starts an echo server and records the kernel-assigned port. Everything
-  // touching RpcServer runs on the base loop: the constructor binds, start()
-  // arms the acceptor, and listenAddress() asserts the loop thread.
-  void startEchoServer() {
-    auto done = std::make_shared<std::promise<void>>();
-    auto ready = done->get_future();
-
-    baseLoop_->runInLoop([this, done] {
-      server_ = std::make_unique<RpcServer>(baseLoop_,
-                                            InetAddress(0, "127.0.0.1"));
-      server_->registry()->registerMethod(
-          "Echo", "Echo",
-          [](std::string_view payload) { return std::string(payload); });
-      server_->start();
-      port_ = server_->listenAddress().toPort();
-      done->set_value();
-    });
-
-    ASSERT_EQ(ready.wait_for(kIoTimeout), std::future_status::ready)
-        << "the base loop never ran the server setup task";
-    ASSERT_NE(port_, 0u) << "listenAddress() did not report a bound port";
-  }
-
-  template <typename Fn> void runOnBaseLoopAndWait(Fn &&fn) {
-    auto done = std::make_shared<std::promise<void>>();
-    auto finished = done->get_future();
-    baseLoop_->runInLoop([fn = std::forward<Fn>(fn), done] {
-      fn();
-      done->set_value();
-    });
-    finished.wait_for(kIoTimeout);
-  }
-
-  std::unique_ptr<EventLoopThread> baseThread_;
-  EventLoop *baseLoop_ = nullptr;
-  std::unique_ptr<RpcServer> server_;
-  uint16_t port_ = 0;
+  RpcServerFixture fixture_;
 };
 
 TEST_F(RpcServerTest, HandWrittenRequestProducesExactResponseBytes) {
-  ASSERT_NO_FATAL_FAILURE(startEchoServer());
-
   ClientSocket client;
   std::string error;
-  ASSERT_TRUE(client.connectTo(port_, &error)) << error;
+  ASSERT_TRUE(client.connectTo(fixture_.port(), &error)) << error;
 
   // Header + body, all bytes spelled out (RFC-0001 §4). request_id = 42.
   // Arrays, not const char*: the header contains NUL bytes, and std::string
@@ -241,11 +194,9 @@ TEST_F(RpcServerTest, HandWrittenRequestProducesExactResponseBytes) {
 }
 
 TEST_F(RpcServerTest, TwoRequestsInOneSegmentYieldTwoResponses) {
-  ASSERT_NO_FATAL_FAILURE(startEchoServer());
-
   ClientSocket client;
   std::string error;
-  ASSERT_TRUE(client.connectTo(port_, &error)) << error;
+  ASSERT_TRUE(client.connectTo(fixture_.port(), &error)) << error;
 
   const std::string first = requestFrame(1, "Echo", "Echo", "first");
   const std::string second = requestFrame(2, "Echo", "Echo", "second");
@@ -266,11 +217,9 @@ TEST_F(RpcServerTest, TwoRequestsInOneSegmentYieldTwoResponses) {
 }
 
 TEST_F(RpcServerTest, RequestSplitAcrossTwoSegmentsYieldsOneResponse) {
-  ASSERT_NO_FATAL_FAILURE(startEchoServer());
-
   ClientSocket client;
   std::string error;
-  ASSERT_TRUE(client.connectTo(port_, &error)) << error;
+  ASSERT_TRUE(client.connectTo(fixture_.port(), &error)) << error;
 
   const std::string frame = requestFrame(3, "Echo", "Echo", "split body");
   const size_t split = 10; // inside the header
@@ -287,11 +236,9 @@ TEST_F(RpcServerTest, RequestSplitAcrossTwoSegmentsYieldsOneResponse) {
 }
 
 TEST_F(RpcServerTest, UnknownMethodAndServiceKeepTheConnectionOpen) {
-  ASSERT_NO_FATAL_FAILURE(startEchoServer());
-
   ClientSocket client;
   std::string error;
-  ASSERT_TRUE(client.connectTo(port_, &error)) << error;
+  ASSERT_TRUE(client.connectTo(fixture_.port(), &error)) << error;
 
   MessageHeader header{};
   std::string body;
@@ -321,9 +268,7 @@ TEST_F(RpcServerTest, UnknownMethodAndServiceKeepTheConnectionOpen) {
 }
 
 TEST_F(RpcServerTest, StartFreezesTheRegistry) {
-  ASSERT_NO_FATAL_FAILURE(startEchoServer());
-
-  EXPECT_TRUE(server_->registry()->frozen());
-  EXPECT_FALSE(server_->registry()->registerMethod(
+  EXPECT_TRUE(fixture_.registry()->frozen());
+  EXPECT_FALSE(fixture_.registry()->registerMethod(
       "Late", "Method", [](std::string_view) { return std::string(); }));
 }
