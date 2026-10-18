@@ -17,8 +17,8 @@ Response errorResponse() { return Response{StatusCode::kInternalError, ""}; }
 } // namespace
 
 RpcClient::RpcClient(EventLoop *loop, const InetAddress &serverAddr)
-    : loop_(loop), client_(std::make_unique<TcpClient>(loop, serverAddr,
-                                                       "RpcClient")) {
+    : loop_(loop),
+      client_(std::make_unique<TcpClient>(loop, serverAddr, "RpcClient")) {
   client_->setConnectionCallback(
       [this](const TransportPtr &transport) { onConnection(transport); });
   client_->setMessageCallback([this](const TransportPtr &transport,
@@ -32,8 +32,9 @@ RpcClient::RpcClient(EventLoop *loop, const InetAddress &serverAddr)
 RpcClient::~RpcClient() {
   // TcpClient (and the Connector inside it) is loop-thread owned.
   loop_->assertInLoopThread();
-  assert(!callInFlight_.load() &&
-         "destroy RpcClient only after every Call() has returned");
+  // No response can arrive after this point. Fulfilling what is left prevents
+  // Callers from waiting on a promise that would never be completed.
+  failAllPending();
   client_.reset();
 }
 
@@ -85,57 +86,27 @@ Response RpcClient::Call(const Request &request) {
     return errorResponse();
   }
 
-  bool expected = false;
-  if (!callInFlight_.compare_exchange_strong(expected, true)) {
-    assert(false && "v0.1 RpcClient allows one in-flight request");
-    return errorResponse();
-  }
-
-  // RFC-0001 requires a non-zero request id. Skipping 0 on wrap keeps that
-  // invariant for the whole 32-bit range.
-  uint32_t requestId = 0;
-  do {
-    requestId = nextRequestId_.fetch_add(1);
-  } while (requestId == 0);
-
   auto promise = std::make_shared<std::promise<Response>>();
   auto future = promise->get_future();
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    pendingCall_ = promise;
-    pendingRequestId_ = requestId;
-  }
-
-  loop_->runInLoop([this, request, requestId] {
-    sendRequestInLoop(request, requestId);
+  loop_->runInLoop([this, request, promise] {
+    startCallInLoop(request, [promise](Response response) {
+      promise->set_value(std::move(response));
+    });
   });
 
-  Response response =
-      future.get(); // resolved by a response or a connection failure
-
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    pendingCall_.reset();
-    pendingRequestId_ = 0;
-  }
-  callInFlight_.store(false);
-  return response;
+  // The promise is resolved by a matching response or by a connection-level
+  // failure. The caller must keep the client alive until this returns.
+  return future.get();
 }
 
 void RpcClient::onConnection(const TransportPtr &transport) {
   loop_->assertInLoopThread();
 
   std::shared_ptr<std::promise<bool>> connectPromise;
-  std::shared_ptr<std::promise<Response>> callPromise;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     connectPromise = std::move(pendingConnect_);
     pendingConnect_.reset();
-    if (!transport->connected()) {
-      callPromise = std::move(pendingCall_);
-      pendingCall_.reset();
-      pendingRequestId_ = 0;
-    }
   }
 
   if (transport->connected()) {
@@ -143,19 +114,16 @@ void RpcClient::onConnection(const TransportPtr &transport) {
     connected_.store(true);
     everConnected_.store(true);
   } else {
-    // The peer closed (or we disconnected): a call still waiting for its
-    // response can no longer be completed.
+    // The peer closed (or we disconnected): no response can arrive any more.
     connection_.reset();
     connected_.store(false);
+    failAllPending();
   }
 
-  // Fulfil the promises without holding mutex_: wakeups immediately try to
-  // reacquire it in connect()/Call().
+  // Fulfil the promise without holding mutex_: the woken thread immediately
+  // tries to reacquire it in connect().
   if (connectPromise != nullptr) {
     connectPromise->set_value(transport->connected());
-  }
-  if (callPromise != nullptr) {
-    callPromise->set_value(errorResponse());
   }
 }
 
@@ -202,37 +170,42 @@ void RpcClient::onMessage(const TransportPtr & /*transport*/, Buffer *buf,
       return;
     }
 
-    bool havePending = false;
-    uint32_t expectedRequestId = 0;
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      havePending = pendingCall_ != nullptr;
-      expectedRequestId = pendingRequestId_;
-    }
-    if (!havePending || header.requestId != expectedRequestId) {
-      // An unsolicited or mismatched response means the peer and this client
-      // disagree about the stream; there is no safe way to continue.
+    auto it = pendings_.find(header.requestId);
+    if (it == pendings_.end()) {
+      // An id we never sent means the two ends disagree about the stream;
+      // silently ignoring it would only delay the failure.
       failConnection();
       return;
     }
 
-    resolveCall(response);
+    // Erase before invoking the completion: it may start another call, and the
+    // table must not be mutated while this entry is being read.
+    PendingCall pending = std::move(it->second);
+    pendings_.erase(it);
+    pending.complete(std::move(response));
   }
 }
 
-void RpcClient::sendRequestInLoop(const Request &request, uint32_t requestId) {
+void RpcClient::startCallInLoop(const Request &request, Completion complete) {
   loop_->assertInLoopThread();
+  assert(complete && "a pending call needs a completion");
 
   if (connection_ == nullptr || !connected_.load()) {
-    resolveCall(errorResponse());
+    complete(errorResponse());
     return;
   }
 
   std::string body;
   if (!codec_.encodeRequest(request, &body)) {
-    resolveCall(errorResponse());
+    complete(errorResponse());
     return;
   }
+
+  const uint32_t requestId = allocateRequestId();
+  // Record the call before sending: the response cannot be read until this
+  // callback returns to the loop, but keeping insertion first makes that
+  // ordering explicit rather than incidental.
+  pendings_.emplace(requestId, PendingCall{requestId, std::move(complete)});
 
   MessageHeader header{};
   header.magic = kMagic;
@@ -253,24 +226,35 @@ void RpcClient::sendRequestInLoop(const Request &request, uint32_t requestId) {
   connection_->send(frame);
 }
 
-void RpcClient::resolveCall(const Response &response) {
+uint32_t RpcClient::allocateRequestId() {
   loop_->assertInLoopThread();
 
-  std::shared_ptr<std::promise<Response>> promise;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    promise = std::move(pendingCall_);
-    pendingCall_.reset();
-    pendingRequestId_ = 0;
+  // Skip 0 (reserved as invalid) and anything still in flight. The latter can
+  // only happen after a full 32-bit wrap, but choosing again is trivial and
+  // keeps the invariant unconditional.
+  for (;;) {
+    const uint32_t id = nextRequestId_.fetch_add(1);
+    if (id != 0 && pendings_.find(id) == pendings_.end()) {
+      return id;
+    }
   }
-  if (promise != nullptr) {
-    promise->set_value(response);
+}
+
+void RpcClient::failAllPending() {
+  loop_->assertInLoopThread();
+
+  // Move the table out first: completions may start new calls, and filling a
+  // new pending while iterating would invalidate the iterator.
+  auto pendings = std::move(pendings_);
+  pendings_.clear();
+  for (auto &entry : pendings) {
+    entry.second.complete(errorResponse());
   }
 }
 
 void RpcClient::failConnection() {
   loop_->assertInLoopThread();
-  resolveCall(errorResponse());
+  failAllPending();
   if (connection_ != nullptr) {
     connection_->forceClose();
   }
