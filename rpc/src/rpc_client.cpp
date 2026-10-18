@@ -86,17 +86,40 @@ Response RpcClient::Call(const Request &request) {
     return errorResponse();
   }
 
+  // The future is resolved by a matching response or by a connection-level
+  // failure. The caller must keep the client alive until this returns.
+  return CallAsync(request).get();
+}
+
+void RpcClient::AsyncCall(const Request &request,
+                          ResponseCallback callback) {
+  assert(callback && "AsyncCall() requires a callback");
+  if (!callback) {
+    return;
+  }
+
+  // Posted from any thread; the loop owns the rest. startCallInLoop reports
+  // every outcome through the completion on this same thread, so the guard
+  // below is documentation as much as a check.
+  loop_->runInLoop([this, request,
+                    callback = std::move(callback)]() mutable {
+    loop_->assertInLoopThread();
+    startCallInLoop(
+        request, [this, callback = std::move(callback)](
+                     Response response) mutable {
+          loop_->assertInLoopThread();
+          callback(std::move(response));
+        });
+  });
+}
+
+std::future<Response> RpcClient::CallAsync(const Request &request) {
   auto promise = std::make_shared<std::promise<Response>>();
   auto future = promise->get_future();
-  loop_->runInLoop([this, request, promise] {
-    startCallInLoop(request, [promise](Response response) {
-      promise->set_value(std::move(response));
-    });
+  AsyncCall(request, [promise](Response response) {
+    promise->set_value(std::move(response));
   });
-
-  // The promise is resolved by a matching response or by a connection-level
-  // failure. The caller must keep the client alive until this returns.
-  return future.get();
+  return future;
 }
 
 void RpcClient::onConnection(const TransportPtr &transport) {

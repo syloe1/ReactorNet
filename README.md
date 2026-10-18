@@ -156,6 +156,24 @@ echo "Hello, Reactor!" | nc localhost 8080
 
 Responses are correlated by request id, so any number of calls may be in flight; v0.1 has no response timeout.
 
+Calls can also be issued without blocking:
+
+```cpp
+// Callback style: the callback runs on the client's loop thread.
+client.AsyncCall(rpc::Request{"Echo", "Echo", "hi"},
+                 [](rpc::Response response) { /* ... */ });
+
+// Future style: send now, wait on another thread.
+std::future<rpc::Response> future =
+    client.CallAsync(rpc::Request{"Echo", "Echo", "hi"});
+rpc::Response response = future.get();
+```
+
+Callbacks must not block or call the synchronous `Call()`: the response they
+would wait for is delivered by that same loop thread. Issuing another
+`AsyncCall()` from a callback is fine. C++17 futures have no continuation, so
+`CallAsync()` only offers `get()`/`wait()`.
+
 ### HTTP Server
 
 ```bash
