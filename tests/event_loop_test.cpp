@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "EventLoop.h"
+#include "EventLoopThread.h"
 
 #include <atomic>
 #include <chrono>
@@ -533,6 +534,29 @@ TEST_F(EventLoopLoopTest, QuitMakesLoopReturn) {
             std::future_status::ready)
       << "quit() must break loop() out of poll and let it return";
   // The join is TearDown's: doing it here too would join a thread twice.
+}
+
+// Regression for #93: ~EventLoopThread() calls quit(), which writes wakeupFd_,
+// while the IO thread may be clearing loop_ and running ~EventLoop(), which
+// closes wakeupFd_. Both publish and invalidate loop_ under mutex_; if that
+// lock is dropped, TSan reports a race between write(wakeupFd_) and
+// close(wakeupFd_) within a few iterations of this loop.
+TEST(EventLoopThreadTest, RepeatedCreateAndDestroyDoesNotRaceOnWakeupFd) {
+  for (int i = 0; i < 200; ++i) {
+    EventLoopThread thread;
+    EventLoop *loop = thread.startLoop();
+    ASSERT_NE(loop, nullptr);
+
+    // Wait until loop() is actually running before the scope ends: a quit()
+    // delivered before loop()'s opening `quit_ = false` would be discarded and
+    // the destructor would block in join(). This handshake is also the point
+    // where the loop sits in poll, which is the window the race needs.
+    auto running = std::make_shared<std::promise<void>>();
+    auto ready = running->get_future();
+    loop->runInLoop([running] { running->set_value(); });
+    ASSERT_EQ(ready.wait_for(kWaitTimeout), std::future_status::ready)
+        << "iteration " << i << ": loop() must start processing functors";
+  }
 }
 
 } // namespace
