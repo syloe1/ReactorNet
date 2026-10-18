@@ -81,6 +81,7 @@ ownership model and thread contract.
 | `TcpConnection` | TCP connection with input/output buffers, `shared_ptr` lifecycle; implements `Transport` |
 | `TcpServer` | Multi-reactor server with accept loop and connection management |
 | `TcpClient` | Client entry point: `Connector` handshake + `TcpConnection` lifecycle |
+| `RpcServer` | Server-side RPC chain: `TcpServer` + `FrameReader` + `Codec` + `ServiceRegistry` ([RFC-0001](docs/rfc/0001-rpc-protocol.md)) |
 | `Acceptor` | Listening socket handler, runs in base reactor |
 | `Buffer` | Non-contiguous read/write buffer with prependable space |
 | `Socket` | RAII wrapper around socket fd |
