@@ -80,6 +80,7 @@ ownership model and thread contract.
 | `Transport` | Transport-agnostic byte-stream interface. TCP is implemented via `TcpConnection`; QUIC is a future target, **not implemented** ([RFC-0003](docs/rfc/0003-transport-abstraction.md)) |
 | `TcpConnection` | TCP connection with input/output buffers, `shared_ptr` lifecycle; implements `Transport` |
 | `TcpServer` | Multi-reactor server with accept loop and connection management |
+| `TcpClient` | Client entry point: `Connector` handshake + `TcpConnection` lifecycle |
 | `Acceptor` | Listening socket handler, runs in base reactor |
 | `Buffer` | Non-contiguous read/write buffer with prependable space |
 | `Socket` | RAII wrapper around socket fd |
