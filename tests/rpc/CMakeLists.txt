@@ -10,6 +10,7 @@ add_executable(reactornet_rpc_tests
     rpc_server_test.cpp
     rpc_client_test.cpp
     pending_call_test.cpp
+    malformed_test.cpp
 )
 
 target_link_libraries(reactornet_rpc_tests PRIVATE
