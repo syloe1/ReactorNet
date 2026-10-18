@@ -1,18 +1,22 @@
 #pragma once
 
 #include "InetAddress.h"
+#include "Timer.h"
 #include "Transport.h"
 #include "noncopyable.h"
 #include "rpc/codec.h"
 #include "rpc/frame_reader.h"
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <future>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace reactornet {
 class EventLoop;
@@ -48,21 +52,31 @@ namespace reactornet::rpc {
 //     only after every Call() has returned and every callback has run.
 //
 // Lifetime of a call: the request is posted to the loop, which assigns an id,
-// records the pending call and sends the frame; a matching response, connect
-// error or peer close resolves it. Call() is just CallAsync().get() on a
-// non-loop thread. v0.1 has no response timeout (#38): if the peer stays
-// connected and never answers, the future (and Call()) waits just as long.
-// C++17 futures have no continuation, so CallAsync() only offers get()/wait();
-// use AsyncCall() when the completion should run without a waiting thread.
+// records the pending call and sends the frame; a matching response, deadline,
+// connect error or peer close resolves it. Call() is just CallAsync().get() on
+// a non-loop thread. C++17 futures have no continuation, so CallAsync() only
+// offers get()/wait(); use AsyncCall() when the completion should run without a
+// waiting thread.
+//
+// Timeouts (#38): a positive timeoutSeconds arms one timer per in-flight call;
+// at the deadline the call completes with kTimeout and its pending entry is
+// removed. A timeout of 0 or less means "no deadline", which is the v0.1
+// behaviour. One timer per call is O(log n) in the timer heap and is sized for
+// hundreds to a few thousand in-flight calls; at a much larger scale switch to
+// a fixed-tick scan over the pending table (gRPC's timeoutChecker does this).
+//
+// Late responses: after a timeout the id is remembered in a bounded FIFO
+// (kMaxRememberedTimeouts). A response carrying such an id is silently
+// discarded — it is late, not a protocol violation. Any other unknown id is
+// still a protocol-level fault: the two ends no longer agree about the stream,
+// so the connection is closed and every pending call fails with kInternalError
+// (RFC-0001; #34). Ids in the remembered set are not reused, so a late response
+// can never be delivered to an unrelated call.
 //
 // Failure semantics before #39: transport problems (not connected, peer
 // closed, malformed response) surface as Response{status = kInternalError,
 // payload = ""} rather than an exception or a hang. Application-level misses
 // still carry the server's own status (kUnknownService / kUnknownMethod).
-//
-// A response whose id is not in the pending table is a protocol-level fault:
-// the two ends no longer agree about the stream, so the connection is closed
-// and every pending call fails with kInternalError (RFC-0001; #34).
 class RpcClient : noncopyable {
 public:
   // Always invoked on the loop thread. See the threading contract above.
@@ -90,26 +104,41 @@ public:
   // both return kInternalError.
   Response Call(const Request &request);
 
+  // Same as above but gives up after timeoutSeconds and returns kTimeout.
+  // timeoutSeconds <= 0 means no deadline.
+  Response Call(const Request &request, double timeoutSeconds);
+
   // Non-blocking form of Call(): posts the request and returns immediately.
   // The callback runs on the loop thread with the response, or with
-  // kInternalError if the call cannot be started. `callback` must not be
-  // empty. The client must stay alive until the callback has run.
+  // kInternalError if the call cannot be started (kTimeout on expiry).
+  // `callback` must not be empty. The client must stay alive until the
+  // callback has run.
   void AsyncCall(const Request &request, ResponseCallback callback);
+
+  // Timeout variant of AsyncCall(); timeoutSeconds <= 0 means no deadline.
+  void AsyncCall(const Request &request, ResponseCallback callback,
+                 double timeoutSeconds);
 
   // Future form of AsyncCall(). The future must be waited on from a thread
   // other than the loop thread, and while the client is alive. Like Call(), a
-  // call that cannot be started yields kInternalError.
+  // call that cannot be started yields kInternalError; expiry yields kTimeout.
   std::future<Response> CallAsync(const Request &request);
+
+  // Timeout variant of CallAsync(); timeoutSeconds <= 0 means no deadline.
+  std::future<Response> CallAsync(const Request &request,
+                                  double timeoutSeconds);
 
 private:
   using TransportPtr = Transport::TransportPtr;
   using Completion = ResponseCallback;
 
+  static constexpr size_t kMaxRememberedTimeouts = 1024;
+
   // One in-flight request. Owned by the loop thread, like the map itself.
-  // #38 will add the deadline and timer needed for timeouts.
   struct PendingCall {
     uint32_t id;
     Completion complete; // must run on the loop thread
+    TimerId timer;       // empty when the call has no deadline
   };
 
   void onConnection(const TransportPtr &transport);
@@ -118,11 +147,15 @@ private:
   void onConnectError(int savedErrno);
 
   // Loop-thread half of Call(): validates the connection, allocates an id,
-  // records the pending call and sends the frame. Any failure is reported
-  // through `complete` on this same thread.
-  void startCallInLoop(const Request &request, Completion complete);
+  // records the pending call (and its deadline) and sends the frame. Any
+  // failure is reported through `complete` on this same thread.
+  void startCallInLoop(const Request &request, Completion complete,
+                       double timeoutSeconds);
 
   uint32_t allocateRequestId();
+  void onTimeout(uint32_t id);
+  void rememberTimedOut(uint32_t id);
+  bool wasTimedOut(uint32_t id) const;
   void failAllPending();
   void failConnection();
 
@@ -135,6 +168,10 @@ private:
 
   // Loop-thread owned. No lock: every access is on the connection's loop.
   std::unordered_map<uint32_t, PendingCall> pendings_;
+  // Bounded FIFO of ids that timed out, so their late responses can be told
+  // apart from genuinely unknown ids. Both containers are loop-thread only.
+  std::deque<uint32_t> timedOutIds_;
+  std::unordered_set<uint32_t> timedOutIdSet_;
   std::atomic<uint32_t> nextRequestId_{1}; // 0 is reserved as invalid
 
   std::atomic<bool> connected_{false};

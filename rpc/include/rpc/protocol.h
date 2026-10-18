@@ -41,6 +41,9 @@ enum class StatusCode : uint8_t {
   kUnknownService = 0x07,
   kUnknownMethod = 0x08,
   kInternalError = 0x09,
+  // Client-side deadline expired (#38). A server never sends this status; it
+  // exists so callers get a typed result instead of a generic error.
+  kTimeout = 0x0A,
 };
 
 struct MessageHeader {

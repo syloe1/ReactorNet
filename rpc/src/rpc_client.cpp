@@ -14,6 +14,8 @@ namespace {
 
 Response errorResponse() { return Response{StatusCode::kInternalError, ""}; }
 
+Response timeoutResponse() { return Response{StatusCode::kTimeout, ""}; }
+
 } // namespace
 
 RpcClient::RpcClient(EventLoop *loop, const InetAddress &serverAddr)
@@ -78,6 +80,10 @@ void RpcClient::connect() {
 void RpcClient::disconnect() { client_->disconnect(); }
 
 Response RpcClient::Call(const Request &request) {
+  return Call(request, 0.0);
+}
+
+Response RpcClient::Call(const Request &request, double timeoutSeconds) {
   if (loop_->isInLoopThread()) {
     // The response can only be delivered by this thread; blocking here is a
     // guaranteed deadlock. Fail fast instead.
@@ -86,13 +92,19 @@ Response RpcClient::Call(const Request &request) {
     return errorResponse();
   }
 
-  // The future is resolved by a matching response or by a connection-level
-  // failure. The caller must keep the client alive until this returns.
-  return CallAsync(request).get();
+  // The future is resolved by a matching response, the deadline, or a
+  // connection-level failure. The caller must keep the client alive until
+  // this returns.
+  return CallAsync(request, timeoutSeconds).get();
 }
 
 void RpcClient::AsyncCall(const Request &request,
                           ResponseCallback callback) {
+  AsyncCall(request, std::move(callback), 0.0);
+}
+
+void RpcClient::AsyncCall(const Request &request, ResponseCallback callback,
+                          double timeoutSeconds) {
   assert(callback && "AsyncCall() requires a callback");
   if (!callback) {
     return;
@@ -101,24 +113,31 @@ void RpcClient::AsyncCall(const Request &request,
   // Posted from any thread; the loop owns the rest. startCallInLoop reports
   // every outcome through the completion on this same thread, so the guard
   // below is documentation as much as a check.
-  loop_->runInLoop([this, request,
+  loop_->runInLoop([this, request, timeoutSeconds,
                     callback = std::move(callback)]() mutable {
     loop_->assertInLoopThread();
     startCallInLoop(
-        request, [this, callback = std::move(callback)](
-                     Response response) mutable {
+        request,
+        [this, callback = std::move(callback)](Response response) mutable {
           loop_->assertInLoopThread();
           callback(std::move(response));
-        });
+        },
+        timeoutSeconds);
   });
 }
 
 std::future<Response> RpcClient::CallAsync(const Request &request) {
+  return CallAsync(request, 0.0);
+}
+
+std::future<Response>
+RpcClient::CallAsync(const Request &request, double timeoutSeconds) {
   auto promise = std::make_shared<std::promise<Response>>();
   auto future = promise->get_future();
-  AsyncCall(request, [promise](Response response) {
-    promise->set_value(std::move(response));
-  });
+  AsyncCall(
+      request,
+      [promise](Response response) { promise->set_value(std::move(response)); },
+      timeoutSeconds);
   return future;
 }
 
@@ -195,6 +214,10 @@ void RpcClient::onMessage(const TransportPtr & /*transport*/, Buffer *buf,
 
     auto it = pendings_.find(header.requestId);
     if (it == pendings_.end()) {
+      if (wasTimedOut(header.requestId)) {
+        // The call already gave up. This response is late, not a violation.
+        continue;
+      }
       // An id we never sent means the two ends disagree about the stream;
       // silently ignoring it would only delay the failure.
       failConnection();
@@ -205,11 +228,15 @@ void RpcClient::onMessage(const TransportPtr & /*transport*/, Buffer *buf,
     // table must not be mutated while this entry is being read.
     PendingCall pending = std::move(it->second);
     pendings_.erase(it);
+    if (pending.timer != TimerId{}) {
+      loop_->cancelTimer(pending.timer);
+    }
     pending.complete(std::move(response));
   }
 }
 
-void RpcClient::startCallInLoop(const Request &request, Completion complete) {
+void RpcClient::startCallInLoop(const Request &request, Completion complete,
+                                double timeoutSeconds) {
   loop_->assertInLoopThread();
   assert(complete && "a pending call needs a completion");
 
@@ -228,7 +255,12 @@ void RpcClient::startCallInLoop(const Request &request, Completion complete) {
   // Record the call before sending: the response cannot be read until this
   // callback returns to the loop, but keeping insertion first makes that
   // ordering explicit rather than incidental.
-  pendings_.emplace(requestId, PendingCall{requestId, std::move(complete)});
+  auto inserted = pendings_.emplace(
+      requestId, PendingCall{requestId, std::move(complete), TimerId{}});
+  if (timeoutSeconds > 0.0) {
+    inserted.first->second.timer = loop_->runAfter(
+        timeoutSeconds, [this, requestId] { onTimeout(requestId); });
+  }
 
   MessageHeader header{};
   header.magic = kMagic;
@@ -252,15 +284,50 @@ void RpcClient::startCallInLoop(const Request &request, Completion complete) {
 uint32_t RpcClient::allocateRequestId() {
   loop_->assertInLoopThread();
 
-  // Skip 0 (reserved as invalid) and anything still in flight. The latter can
-  // only happen after a full 32-bit wrap, but choosing again is trivial and
-  // keeps the invariant unconditional.
+  // Skip 0 (reserved as invalid), anything still in flight, and any id kept
+  // for late-response recognition. A collision can only happen after a full
+  // 32-bit wrap, but choosing again is trivial and keeps the invariant
+  // unconditional.
   for (;;) {
     const uint32_t id = nextRequestId_.fetch_add(1);
-    if (id != 0 && pendings_.find(id) == pendings_.end()) {
+    if (id != 0 && pendings_.find(id) == pendings_.end() &&
+        timedOutIdSet_.find(id) == timedOutIdSet_.end()) {
       return id;
     }
   }
+}
+
+void RpcClient::onTimeout(uint32_t id) {
+  loop_->assertInLoopThread();
+
+  auto it = pendings_.find(id);
+  if (it == pendings_.end()) {
+    return; // answered, failed, or already timed out
+  }
+
+  PendingCall pending = std::move(it->second);
+  pendings_.erase(it);
+  // The timer has already fired; no cancel is needed. Remember the id so a
+  // response that is still on the wire is discarded instead of closing the
+  // connection.
+  rememberTimedOut(id);
+  pending.complete(timeoutResponse());
+}
+
+void RpcClient::rememberTimedOut(uint32_t id) {
+  loop_->assertInLoopThread();
+
+  if (timedOutIdSet_.size() >= kMaxRememberedTimeouts) {
+    timedOutIdSet_.erase(timedOutIds_.front());
+    timedOutIds_.pop_front();
+  }
+  timedOutIds_.push_back(id);
+  timedOutIdSet_.insert(id);
+}
+
+bool RpcClient::wasTimedOut(uint32_t id) const {
+  loop_->assertInLoopThread();
+  return timedOutIdSet_.find(id) != timedOutIdSet_.end();
 }
 
 void RpcClient::failAllPending() {
@@ -271,6 +338,9 @@ void RpcClient::failAllPending() {
   auto pendings = std::move(pendings_);
   pendings_.clear();
   for (auto &entry : pendings) {
+    if (entry.second.timer != TimerId{}) {
+      loop_->cancelTimer(entry.second.timer);
+    }
     entry.second.complete(errorResponse());
   }
 }
