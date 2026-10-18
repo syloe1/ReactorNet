@@ -7,6 +7,7 @@ add_executable(reactornet_rpc_tests
     registry_test.cpp
     rpc_server_test.cpp
     rpc_client_test.cpp
+    pending_call_test.cpp
 )
 
 target_link_libraries(reactornet_rpc_tests PRIVATE

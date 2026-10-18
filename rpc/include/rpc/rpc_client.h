@@ -8,9 +8,11 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <future>
 #include <memory>
 #include <mutex>
+#include <unordered_map>
 
 namespace reactornet {
 class EventLoop;
@@ -21,30 +23,37 @@ namespace reactornet::rpc {
 
 // Client side of the v0.1 RPC stack: TcpClient + FrameReader + Codec.
 //
-// v0.1 deliberately allows exactly one in-flight request. That removes the
-// need for a pending-request table and lets the request/response loop be
-// tested end to end; concurrent correlation (M3) is then an additive change
-// rather than a rewrite.
+// Requests are correlated by request id: every request gets a non-zero id and
+// its response is looked up in the loop-thread-owned pending table. Responses
+// may therefore arrive in any order (the server's work takes different times),
+// and several calls may be in flight at once.
 //
 // Threading:
-//   - connect() and Call() are blocking and MUST NOT be called on the loop
-//     thread. Call() in particular would deadlock: the response callback runs
-//     on that same thread and could never resolve the promise it is waiting
-//     for. Both assert rather than hang.
+//   - Call() is blocking and MUST NOT be called on the loop thread. It would
+//     deadlock: the response callback runs on that same thread and could never
+//     resolve the promise it is waiting for. It asserts rather than hangs.
+//     Call() may be called from several threads concurrently.
+//   - The pending table is only ever touched on the loop thread, so it needs no
+//     lock. The request-id counter is atomic for the same reason it is exposed
+//     across threads.
 //   - disconnect() is safe from any thread (TcpClient hops onto the loop).
 //   - Like TcpClient, the object must be destroyed on the loop thread, and
 //     only after every Call() has returned.
 //
-// Lifetime of a call: Call() publishes one promise, posts the frame to the
-// loop, and blocks on its future. The loop thread sends the frame on connect
-// or resolves the promise immediately; a response, connect error or peer close
-// resolves it from the loop thread. v0.1 has no response timeout (#39): if the
-// peer stays connected and never answers, Call() waits just as long.
+// Lifetime of a call: Call() creates a promise, posts the request to the loop,
+// and blocks on its future. The loop thread assigns an id, records the pending
+// call and sends the frame; a matching response, connect error or peer close
+// resolves it. v0.1 has no response timeout (#38): if the peer stays connected
+// and never answers, Call() waits just as long.
 //
 // Failure semantics before #39: transport problems (not connected, peer
 // closed, malformed response) surface as Response{status = kInternalError,
 // payload = ""} rather than an exception or a hang. Application-level misses
 // still carry the server's own status (kUnknownService / kUnknownMethod).
+//
+// A response whose id is not in the pending table is a protocol-level fault:
+// the two ends no longer agree about the stream, so the connection is closed
+// and every pending call fails with kInternalError (RFC-0001; #34).
 class RpcClient : noncopyable {
 public:
   RpcClient(EventLoop *loop, const InetAddress &serverAddr);
@@ -59,31 +68,39 @@ public:
   void connect();
 
   // Orderly close: pending output is flushed, then the write side is shut
-  // down. A subsequent Call() returns kInternalError; there is no reconnect.
+  // down. Outstanding calls fail with kInternalError; there is no reconnect.
   void disconnect();
 
   // Sends one request and blocks until its response arrives or the connection
-  // fails. Must be called from a thread other than the loop thread; at most one
-  // Call may be outstanding. An invalid Request (empty service/method, body
-  // over the protocol limit) and a disconnected client both return
-  // kInternalError.
+  // fails. Must be called from a thread other than the loop thread; any
+  // number of threads may call it concurrently. An invalid Request (empty
+  // service/method, body over the protocol limit) and a disconnected client
+  // both return kInternalError.
   Response Call(const Request &request);
 
 private:
   using TransportPtr = Transport::TransportPtr;
+  using Completion = std::function<void(Response)>;
+
+  // One in-flight request. Owned by the loop thread, like the map itself.
+  // #38 will add the deadline and timer needed for timeouts.
+  struct PendingCall {
+    uint32_t id;
+    Completion complete; // must run on the loop thread
+  };
 
   void onConnection(const TransportPtr &transport);
   void onMessage(const TransportPtr &transport, Buffer *buf,
                  Timestamp receiveTime);
   void onConnectError(int savedErrno);
 
-  // Loop-thread half of Call(): checks the connection, encodes the frame and
-  // sends it, or resolves the waiting promise with an error.
-  void sendRequestInLoop(const Request &request, uint32_t requestId);
+  // Loop-thread half of Call(): validates the connection, allocates an id,
+  // records the pending call and sends the frame. Any failure is reported
+  // through `complete` on this same thread.
+  void startCallInLoop(const Request &request, Completion complete);
 
-  // Loop-thread helper: take the pending promise (if any) and fulfil it.
-  void resolveCall(const Response &response);
-  // Loop-thread helper: fail the pending call and tear the connection down.
+  uint32_t allocateRequestId();
+  void failAllPending();
   void failConnection();
 
   EventLoop *const loop_;
@@ -93,15 +110,16 @@ private:
   FrameReader frameReader_;
   TransportPtr connection_; // loop-thread only
 
+  // Loop-thread owned. No lock: every access is on the connection's loop.
+  std::unordered_map<uint32_t, PendingCall> pendings_;
+  std::atomic<uint32_t> nextRequestId_{1}; // 0 is reserved as invalid
+
   std::atomic<bool> connected_{false};
   std::atomic<bool> everConnected_{false};
-  std::atomic<bool> callInFlight_{false};
-  std::atomic<uint32_t> nextRequestId_{1};
 
-  // Shared between the calling thread and the loop thread.
+  // connect() blocks a business thread while the loop completes the handshake,
+  // so this one promise is genuinely shared across threads.
   std::mutex mutex_;
-  std::shared_ptr<std::promise<Response>> pendingCall_;
-  uint32_t pendingRequestId_ = 0;
   std::shared_ptr<std::promise<bool>> pendingConnect_;
 };
 

@@ -82,7 +82,7 @@ ownership model and thread contract.
 | `TcpServer` | Multi-reactor server with accept loop and connection management |
 | `TcpClient` | Client entry point: `Connector` handshake + `TcpConnection` lifecycle |
 | `RpcServer` | Server-side RPC chain: `TcpServer` + `FrameReader` + `Codec` + `ServiceRegistry` ([RFC-0001](docs/rfc/0001-rpc-protocol.md)) |
-| `RpcClient` | Blocking client with one in-flight request: `TcpClient` + `FrameReader` + `Codec` |
+| `RpcClient` | Blocking client with request-id correlation (many in-flight calls): `TcpClient` + `FrameReader` + `Codec` |
 | `Acceptor` | Listening socket handler, runs in base reactor |
 | `Buffer` | Non-contiguous read/write buffer with prependable space |
 | `Socket` | RAII wrapper around socket fd |
@@ -154,7 +154,7 @@ echo "Hello, Reactor!" | nc localhost 8080
 # status=0 payload="hello rpc"
 ```
 
-The client allows one in-flight request in v0.1 and has no response timeout.
+Responses are correlated by request id, so any number of calls may be in flight; v0.1 has no response timeout.
 
 ### HTTP Server
 
