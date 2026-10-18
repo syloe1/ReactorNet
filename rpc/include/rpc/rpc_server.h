@@ -72,6 +72,14 @@ public:
   // frame. This is the second of the two layers described above.
   void setMaxInputBufferSize(size_t maxInputBufferSize);
 
+  // Payload format this server accepts for REQUEST bodies, carried in the
+  // frame header (#42). Default kSerializerRaw (0) -- the only format v0.1
+  // ever sent, and what a pre-#42 peer's zeroed reserved byte still means.
+  // A request with any other id is answered with kUnsupportedSerializer and
+  // its payload is not dispatched; the frame itself stays framed, so the
+  // connection remains usable. Configure before start().
+  void setSerializerId(uint8_t serializerId);
+  uint8_t serializerId() const;
   void start();
 
   // Delegates to TcpServer::listenAddress(): base loop thread, after start().
@@ -95,6 +103,7 @@ private:
   FrameReader frameReader_;
   RawCodec codec_;
   size_t maxInputBufferSize_ = 0; // 0 = follow frameReader_.maxFrameSize()
+  uint8_t serializerId_ = kSerializerRaw;
 };
 
 } // namespace reactornet::rpc
