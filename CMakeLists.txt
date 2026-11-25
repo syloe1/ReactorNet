@@ -72,10 +72,6 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(reactornet PUBLIC -Wall -Wextra -Wpedantic)
 endif()
 
-# The RPC layer is built on top of the core. The dependency is one-way: core
-# sources must never include rpc/ headers (enforced by the CI boundary grep).
-# **进入 `rpc/` 这个子文件夹，读取里面的 `CMakeLists.txt`，把 rpc 目录里的构建逻辑并入当前工程一起编译**。
-add_subdirectory(rpc)
 # add_executable(名字 对应的cpp文件) 构建一个可执行程序
 # Private  > **这个程序自己需要这个库，但是这个依赖不会继续往外传递**
 # Echo Server example
@@ -86,22 +82,14 @@ target_link_libraries(echo_server PRIVATE reactornet)
 add_executable(http_server example/http_server.cpp)
 target_link_libraries(http_server PRIVATE reactornet)
 
-# RPC echo example: server and blocking client
-add_executable(rpc_echo_server example/rpc_echo_server.cpp)
-target_link_libraries(rpc_echo_server PRIVATE reactornet_rpc)
-
-add_executable(rpc_echo_client example/rpc_echo_client.cpp)
-target_link_libraries(rpc_echo_client PRIVATE reactornet_rpc)
-
-# Serialization microbenchmark for ADR-002 (#41). Standalone on purpose: it is
-# not part of the library or the test suite, and its reference encoders have no
-# third-party dependencies. See docs/adr/0002-serialization.md for the command.
+# Serialization microbenchmark. Standalone on purpose: it is not part of the
+# library or the test suite, and its reference encoders have no third-party
+# dependencies.
 add_executable(serialization_bench bench/serialization_bench.cpp)
 target_link_libraries(serialization_bench PRIVATE reactornet)
 
 # Install
-install(TARGETS echo_server http_server rpc_echo_server rpc_echo_client
-        DESTINATION bin)
+install(TARGETS echo_server http_server DESTINATION bin)
 
 # --- Tests -----------------------------------------------------------------
 # GoogleTest is a dev-only dependency: nothing under tests/ is ever linked into

@@ -19,7 +19,7 @@ class EventLoop;
 //   - TCP  : 一条 TcpConnection 恰好承载一条流，streamId() 恒为 kDefaultStreamId。
 //   - QUIC : 一个 QUIC 连接承载多条流，每条流是一个 Transport，
 //            streamId() 返回 QUIC 的 stream id。
-// 上游（HTTP / RPC 会话）只依赖 TransportPtr，不知道底层是 TCP 还是 QUIC。
+// 上游（HTTP 等应用代码）只依赖 TransportPtr，不知道底层是 TCP 还是 QUIC。
 //
 // 线程契约：除 send() / forceClose() 外，所有方法 MUST 在 getLoop() 所属线程调用。
 // send() / forceClose() 线程安全，内部 runInLoop 回本线程（与 TcpConnection 现状一致）。

@@ -1,4 +1,4 @@
-// Serialization microbenchmark for ADR-002 (#41).
+// Standalone serialization microbenchmark.
 //
 // Five wire formats encode and decode the same small record. The
 // implementations below are deliberately self-contained: the point is to

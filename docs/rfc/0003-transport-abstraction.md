@@ -6,7 +6,7 @@
 | 标题 | 可插拔 Transport 抽象层 |
 | 状态 | Draft（待 review） |
 | 日期 | 2026-10-06 |
-| 里程碑 | RPC M1 · 网络层补齐 |
+| 里程碑 | M1 · 网络层补齐 |
 | 对应 issue | #58 |
 | 依赖 | 无 |
 | 被依赖 | #59 #60 #61 #62 #63 #64 #65 #66 |
@@ -16,7 +16,7 @@
 
 本文档**不实现 QUIC**。QUIC 只作为论证材料出现（§12），用来说明这个抽象为何成立、在哪里会别扭。抽象先用 TCP 钉死，等 QUIC 真开始写，再由它逼出第二版接口。
 
-本文档不含任何 RPC 帧层设计。分帧格式是 RFC-0001 的事，两者正交：RFC-0001 管「字节怎么摆」，本文档管「字节从哪条管道进出」。
+本文档不含任何应用层帧格式设计。分帧与序列化属于上层会话（在 `extend-rpc` 分支上），与本抽象正交：应用层管「字节怎么摆」，本文档管「字节从哪条管道进出」。
 
 ---
 
@@ -31,19 +31,19 @@ TCP  : 一条 TcpConnection 恰好承载一条流，streamId() 恒为 kDefaultSt
 QUIC : 一个连接承载多条流，每条流是一个 Transport，streamId() 返回 QUIC stream id
 ```
 
-`TcpConnection` 公有继承 `Transport`，现有回调调用点一行不改。上层（HTTP / RPC 会话）从此只依赖 `TransportPtr`，不依赖 fd，也不知道底层是 TCP 还是 QUIC。
+`TcpConnection` 公有继承 `Transport`，现有回调调用点一行不改。上层（HTTP 等应用代码）从此只依赖 `TransportPtr`，不依赖 fd，也不知道底层是 TCP 还是 QUIC。
 
 ---
 
 ## 2. 为什么先写这份文档
 
-与 RFC-0001 §2 同一个理由：**接口是改起来最贵的东西**。
+理由很简单：**接口是改起来最贵的东西**。
 
-一旦 RPC 会话层、HTTP 层、测试都开始依赖 `Transport` 的形状，改一个虚函数签名就要同时改实现、调用点、测试与 example。在文档里改到满意，比在代码里改便宜一个数量级。
+一旦应用层（HTTP 等）与测试开始依赖 `Transport` 的形状，改一个虚函数签名就要同时改实现、调用点、测试与 example。在文档里改到满意，比在代码里改便宜一个数量级。
 
 本文档的验收标准不是「作者看懂了」，而是：**另一个人只看这份文档，就能写出 `TcpConnection` 的迁移改动，且改出来的与本文档一致。**
 
-与 RFC-0001 的一处不同：RFC-0001 定义的是线格式，改错了会破坏兼容性；本文档定义的是**进程内接口**，改错了只会让自己加班。因此本文档的纪律可以松一档——不必为「未来」预留无法验证的钩子，宁可等真实需求出现再改（§12.4）。
+本文档定义的是**进程内接口**，改错了不会破坏线上兼容性，只会让自己加班。因此本文档的纪律可以松一档——不必为「未来」预留无法验证的钩子，宁可等真实需求出现再改（§12.4）。
 
 ---
 
@@ -56,7 +56,7 @@ QUIC : 一个连接承载多条流，每条流是一个 Transport，streamId() �
 | Transport | 本文档定义的对「一条流」的抽象，见 §7 |
 | 裸 fd seam | 以裸 `int` 传递 socket 描述符的接口边界，见 §4.1 |
 | 机械改名 | 只改参数类型名、不动方法体的源码改动，见 §10.3 |
-| 上游 / 下游 | 上游指应用代码（HTTP / RPC 会话），下游指具体传输实现（TCP / QUIC） |
+| 上游 / 下游 | 上游指应用代码（HTTP 等），下游指具体传输实现（TCP / QUIC） |
 
 约定：`MUST` / `MUST NOT` / `SHOULD` / `MAY` 按 RFC 2119 解释。
 
@@ -122,7 +122,7 @@ TcpConnection(EventLoop*, name, int sockfd, local, peer)          include/TcpCon
 本轮**明确不做**，写在这里是为了防止 PR 膨胀：
 
 - **QUIC 的任何实现与依赖引入。** 仓库是 Zero Dependencies 的，真接 QUIC 必然引入 crypto 库，那是独立的构建/依赖决策（§13 第 7 条）。
-- **RPC 帧层、序列化、连接池。** 属 RFC-0001 及后续 issue。
+- **应用层帧格式、序列化、连接池。** 属于上层扩展（`extend-rpc` 分支）。
 - **Poller / 事件源可插拔化。** 把 epoll 换成 io_uring、或让 QUIC 自带事件循环接进来，是另一个抽象层次的问题（§13 第 4 条）。`EventLoop.cpp:48` 硬编码 `new EPollPoller` 而没走已有的 `Poller::newDefaultPoller` 工厂（`src/EPollPoller.cpp:109-111`），这是**启用既有工厂**，不是设计新抽象，单独开 issue。
 - **定时器 API。** `EventLoop` 至今没有公开定时器接口（`timerQueue_` 是 private、无 accessor，`include/EventLoop.h:93`），而 QUIC 重度依赖定时器。本文档只记录这个约束，不设计接口（§13 第 1 条）。
 - **客户端 / connect 路径。** `Socket` 无 `connect`，现有抽象是服务端形态。
@@ -155,7 +155,7 @@ TcpConnection(EventLoop*, name, int sockfd, local, peer)          include/TcpCon
 
 接口上**保留 `streamId()` 访问器**（TCP 返回 `kDefaultStreamId`），但**不做参数化的 `send` / 回调**。
 
-保留它是因为：上层若某天需要对同一连接内的多条流做 demux（例如多路复用的 RPC 客户端），读一个访问器就够了，不需要改签名。成本为零，所以留着。
+保留它是因为：上层若某天需要对同一连接内的多条流做 demux（例如多路复用的客户端），读一个访问器就够了，不需要改签名。成本为零，所以留着。
 
 不做参数化是因为：那个参数在 TCP 上恒为 0，在 QUIC 上又不足以表达完整语义（流还有独立的流控、半关闭、单向/双向之分，见 §13 第 2 条）。**一个既无信息量又不充分的参数，不如不给。**
 
@@ -187,7 +187,7 @@ class EventLoop;
 //   - TCP  : 一条 TcpConnection 恰好承载一条流，streamId() 恒为 kDefaultStreamId。
 //   - QUIC : 一个 QUIC 连接承载多条流，每条流是一个 Transport，
 //            streamId() 返回 QUIC 的 stream id。
-// 上游（HTTP / RPC 会话）只依赖 TransportPtr，不知道底层是 TCP 还是 QUIC。
+// 上游（HTTP 等应用代码）只依赖 TransportPtr，不知道底层是 TCP 还是 QUIC。
 //
 // 线程契约：除 send() / forceClose() 外，所有方法 MUST 在 getLoop() 所属线程调用。
 // send() / forceClose() 线程安全，内部 runInLoop 回本线程（与 TcpConnection 现状一致）。
@@ -471,7 +471,7 @@ ssize_t Buffer::readFrom(Socket &s, int *e)  { return readCore(-1, &s, e); }
 
 正确顺序是：**先用 TCP 把接口钉死，等 QUIC 实现真的写起来，让 QUIC 逼出第二版接口**，届时按 §14 的修订流程改。
 
-这与 RFC-0001 §12 确立的「先改文档再改实现」是同一个纪律。
+这与本文档 §14 的修订纪律一致：先改文档，再改实现。
 
 ---
 
@@ -481,11 +481,11 @@ ssize_t Buffer::readFrom(Socket &s, int *e)  { return readCore(-1, &s, e); }
 
 | # | 问题 | 为什么现在不定 |
 |---|---|---|
-| 1 | **定时器能力**：`EventLoop` 无公开定时器 API，`timerQueue_` 私有（`include/EventLoop.h:93`），`kPollTimeMs` 硬编码 10s（`src/EventLoop.cpp:19`）。QUIC idle timeout / 握手超时 / RPC deadline 都需要 | 它需要独立的 API 设计（返回句柄 vs 裸指针、cancel 语义、跨线程契约），与 Transport 抽象**正交**。仓库已有 issue #20 / #21 在跟这条线。本文档只记录「Transport 对超时有需求」，不给接口 |
+| 1 | **定时器能力**：`EventLoop` 无公开定时器 API，`timerQueue_` 私有（`include/EventLoop.h:93`），`kPollTimeMs` 硬编码 10s（`src/EventLoop.cpp:19`）。QUIC idle timeout / 握手超时 / 应用层 deadline 都需要 | 它需要独立的 API 设计（返回句柄 vs 裸指针、cancel 语义、跨线程契约），与 Transport 抽象**正交**。仓库已有 issue #20 / #21 在跟这条线。本文档只记录「Transport 对超时有需求」，不给接口 |
 | 2 | **连接级多路复用语义**：GOAWAY、MAX_STREAMS、连接级流控、连接关闭向所有流扇出，在「每流一个 Transport」下无归属 | 没有 QUIC 实现，无法判断哪些连接级操作真需要暴露给上游。先建 `QuicConnection` 的需求形态未知（§12.3 第 1 条） |
 | 3 | **连接级生命周期与 0-RTT / 连接迁移**：会动摇 `peerAddress()` 的稳定性假设 | 只有 QUIC 才需要，且会影响接口对地址的 `const` 承诺。需实测后再定（§12.3 第 3 条） |
 | 4 | **事件源集成**：msquic 自带 worker 线程、quiche 需要把定时器接进 epoll 循环。是否要泛化 `Poller`、或引入通用 event source？ | 已明确排除在本轮外（§5.2）。且这是**实现级**问题，不是接口级问题——`Transport` 接口不必知道事件源长什么样 |
-| 5 | **统一错误模型**：现在错误只 `std::cerr`（`src/TcpConnection.cpp:70,92,117-123`），无错误码、无 error 回调。Transport 需要统一 errno（TCP）与 QUIC transport error code | 定义错误模型需要**消费者**——RPC 会话层要区分「可重试 / 不可重试」错误。现在没有消费者，先定义只会长出没人用的枚举。仓库已有 issue #39 在跟 |
+| 5 | **统一错误模型**：现在错误只 `std::cerr`（`src/TcpConnection.cpp:70,92,117-123`），无错误码、无 error 回调。Transport 需要统一 errno（TCP）与 QUIC transport error code | 定义错误模型需要**消费者**——应用层要区分「可重试 / 不可重试」错误。现在没有消费者，先定义只会长出没人用的枚举。仓库已有 issue #39 在跟 |
 | 6 | **背压 / 写缓冲上限**：`outputBuffer_` 无上限；QUIC 有流控 | 与 Transport 抽象正交。TCP 侧本身是已知缺陷，应作为独立 issue（仓库已有 #23）在有压力测试后再做 |
 | 7 | **零依赖政策 vs QUIC 三方库** | 属构建 / 依赖决策。等真要实现 QUIC 时单独论证（可选组件、默认关闭）。见 §12.3 第 5 条 |
 

@@ -832,7 +832,7 @@ TEST_F(IntegrationTest, ClientCloseIsNoticedAndServerKeepsServing) {
 // every server-side call below goes through TransportPtr. A change that keeps
 // TCP working but breaks the abstraction (an accessor that stops being virtual,
 // a callback signature that drifts back to TcpConnectionPtr) should fail here
-// before it reaches an HTTP or RPC session layer.
+// before it reaches an application layer.
 
 TEST_F(IntegrationTest, TransportSendReachesPeer) {
   auto slot = std::make_shared<ConnectionSlot>();
