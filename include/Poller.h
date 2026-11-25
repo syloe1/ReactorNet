@@ -32,7 +32,7 @@ public:
   // 阻塞轮询， 等待内核IO事件， 把就绪的Channel填入activeChannels
   virtual Timestamp poll(int timeoutMs, ChannelList *activeChannels) = 0;
   // 基类兜底返回false, 子类EpollPoller会重写
-  virtual bool hasChannel(Channel *channel) const { return false; }
+  virtual bool hasChannel(Channel * /*channel*/) const { return false; }
   // 工厂方法
   static Poller *newDefaultPoller(EventLoop *loop);
 

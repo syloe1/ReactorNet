@@ -338,6 +338,8 @@ TEST_F(ErrorModelTest, StatusToStringNamesEveryDefinedStatus) {
   EXPECT_STREQ(statusToString(StatusCode::kConnectionClosed),
                "CONNECTION_CLOSED");
   EXPECT_STREQ(statusToString(StatusCode::kBadRequest), "BAD_REQUEST");
+  EXPECT_STREQ(statusToString(StatusCode::kUnsupportedSerializer),
+               "UNSUPPORTED_SERIALIZER");
 
   // Reserved / application-defined values are not names this version knows.
   EXPECT_STREQ(statusToString(static_cast<StatusCode>(0x7F)), "UNKNOWN_STATUS");

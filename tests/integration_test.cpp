@@ -853,6 +853,10 @@ TEST_F(IntegrationTest, TransportSendReachesPeer) {
   std::string received;
   ASSERT_TRUE(client.recvExactly(payload.size(), &received, &error)) << error;
   EXPECT_EQ(received, payload);
+
+  // The connection callback (captured by TcpConnection) holds slot, and slot
+  // holds conn: without this the two keep each other alive past teardown.
+  slot->release();
 }
 
 TEST_F(IntegrationTest, TransportMessageCallbackDeliversBuffer) {
@@ -916,6 +920,8 @@ TEST_F(IntegrationTest, TransportWriteCompleteCallbackFiresAfterShortWrite) {
 
   ASSERT_TRUE(completed->waitForAtLeast(1, kDeadline))
       << "writeCompleteCallback never fired after the output buffer drained";
+
+  slot->release();
 }
 
 // shutdown() is the orderly half-close: it must let pending bytes finish
@@ -945,6 +951,8 @@ TEST_F(IntegrationTest, TransportShutdownIsOrderlyHalfClose) {
   expectSameBytes(payload, received);
 
   ASSERT_TRUE(client.expectEof(&error)) << error;
+
+  slot->release();
 }
 
 TEST_F(IntegrationTest, TransportForceCloseClosesImmediately) {
@@ -987,6 +995,8 @@ TEST_F(IntegrationTest, TransportAccessorsExposeConnectionState) {
       << "connection name should identify the peer: " << conn->name();
   EXPECT_EQ(conn->localAddress().toPort(), port);
   EXPECT_FALSE(conn->peerAddress().toIpPort().empty());
+
+  slot->release();
 }
 
 TEST_F(IntegrationTest, TransportStreamIdIsDefault) {
@@ -1002,6 +1012,8 @@ TEST_F(IntegrationTest, TransportStreamIdIsDefault) {
   TransportPtr conn = slot->wait(kDeadline);
   ASSERT_TRUE(conn);
   EXPECT_EQ(conn->streamId(), Transport::kDefaultStreamId);
+
+  slot->release();
 }
 
 // send() must be usable from any thread; the actual write has to happen on the
@@ -1042,6 +1054,8 @@ TEST_F(IntegrationTest, TransportSendFromNonLoopThreadReachesPeer) {
   ASSERT_TRUE(completed->waitForAtLeast(1, kDeadline));
   EXPECT_TRUE(ranOnLoopThread->load())
       << "send() must move the write onto the connection's loop thread";
+
+  slot->release();
 }
 
 } // namespace

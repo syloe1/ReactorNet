@@ -5,7 +5,7 @@ project(ReactorNet VERSION 1.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-
+# 静态库只有编译， 没有链接
 # Link libraries (Linux: pthread is often needed implicitly, but be explicit)
 # NOTE: must come before target_link_libraries — the imported target has to exist first.
 find_package(Threads REQUIRED)
@@ -60,6 +60,7 @@ set(SOURCES
 )
 
 # Create the static library
+# add_library(<目标名> <类型> [源文件列表])
 add_library(reactornet STATIC ${SOURCES})
 
 # PUBLIC: anything linking reactornet inherits the include path and pthread.
@@ -73,8 +74,10 @@ endif()
 
 # The RPC layer is built on top of the core. The dependency is one-way: core
 # sources must never include rpc/ headers (enforced by the CI boundary grep).
+# **进入 `rpc/` 这个子文件夹，读取里面的 `CMakeLists.txt`，把 rpc 目录里的构建逻辑并入当前工程一起编译**。
 add_subdirectory(rpc)
-
+# add_executable(名字 对应的cpp文件) 构建一个可执行程序
+# Private  > **这个程序自己需要这个库，但是这个依赖不会继续往外传递**
 # Echo Server example
 add_executable(echo_server example/echo_server.cpp)
 target_link_libraries(echo_server PRIVATE reactornet)

@@ -43,10 +43,15 @@ void TcpConnection::connectEstablished() {
 
 void TcpConnection::connectDestroyed() {
   loop_->assertInLoopThread();
-  if (state_ == kConnected) {
+  // Anything short of kDisconnected may still have events armed: kDisconnecting
+  // in particular is reached by shutdown() before the peer's FIN arrives, and
+  // Channel::remove() asserts that no events are registered. Disable first, and
+  // only report the close for a connection the user ever saw as connected.
+  if (state_ != kDisconnected) {
+    const bool wasConnected = (state_ == kConnected);
     state_ = kDisconnected;
     channel_->disableAll();
-    if (connectionCallback_) {
+    if (wasConnected && connectionCallback_) {
       connectionCallback_(shared_from_this());
     }
   }

@@ -7,6 +7,13 @@
 # git tag: a tag can be moved on the remote, a content hash cannot.
 include(FetchContent)
 
+# CMP0135 (CMake 3.24+): extract downloaded archives with the extraction time
+# as their timestamp, so refreshing the URL content actually triggers a rebuild.
+# Guarded so the 3.10 minimum still configures on older CMake.
+if(POLICY CMP0135)
+    cmake_policy(SET CMP0135 NEW)
+endif()
+
 FetchContent_Declare(
     googletest
     URL      https://codeload.github.com/google/googletest/tar.gz/refs/tags/v1.14.0

@@ -30,6 +30,8 @@ const char *statusToString(StatusCode status) {
     return "CONNECTION_CLOSED";
   case StatusCode::kBadRequest:
     return "BAD_REQUEST";
+  case StatusCode::kUnsupportedSerializer:
+    return "UNSUPPORTED_SERIALIZER";
   }
   return "UNKNOWN_STATUS";
 }
